@@ -35,7 +35,7 @@ cliente vai ao escritório da obra assinar o termo. O engenheiro não vê nada e
 
 ## Arquitetura
 - Site estático (sem build): `index.html` + `app.js` (módulo ES) + `config.js`.
-  Hospedagem: GitHub Pages, repositório `construfasevistorias/s-olucas` → https://construfasevistorias.github.io/s-olucas/
+  Hospedagem: GitHub Pages, repositório `construfasevistorias/saolucas` → https://construfasevistorias.github.io/saolucas/ (Supabase: projeto ebojcleuctquzphzyepv, São Paulo)
 - **Supabase**: Postgres + Auth (e-mail/senha, cadastro público desligado) + Storage (bucket
   `fotos`, privado) + Realtime. Esquema em `supabase/schema.sql`.
 - **IA**: Edge Function `supabase/functions/sugerir` chama a API da Anthropic
