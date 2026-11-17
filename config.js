@@ -3,8 +3,8 @@
 // Depois de criar o projeto no Supabase, cole aqui:
 //   Supabase > Project Settings > API > Project URL  e  anon public key
 window.VISTORIA_CONFIG = {
-  SUPABASE_URL: "",
-  SUPABASE_ANON_KEY: "",
+  SUPABASE_URL: "https://ebojcleuctquzphzyepv.supabase.co",
+  SUPABASE_ANON_KEY: "sb_publishable_vkjSDs_2XYpCM9c448Mv_w_SCEqnJtu",
   EMPREENDIMENTO_PADRAO: "Residencial São Lucas",
   // Login curto: a pessoa digita só "ricardo" e o sistema completa com este domínio.
   DOMINIO_LOGIN: "vistoria.construfase.com.br",
