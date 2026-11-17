@@ -146,6 +146,11 @@ create trigger t_base_upd before update on public.base_solucoes
 -- Cadastro público fica DESLIGADO no painel do Supabase
 -- (Authentication > Providers > Email > desmarque "Allow new users to sign up").
 -- =====================================================================
+-- Acesso pela API só para quem fez login (funciona mesmo com "Automatically expose new tables" desligado)
+grant usage on schema public to authenticated;
+grant select, insert, update, delete on all tables in schema public to authenticated;
+revoke all on all tables in schema public from anon;
+
 alter table public.perfis           enable row level security;
 alter table public.empreendimentos  enable row level security;
 alter table public.unidades         enable row level security;
