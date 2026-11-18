@@ -31,6 +31,7 @@ const PAPEIS = { vistoriador: "Vistoriador(a)", engenheiro: "Engenharia", admin:
 const ICONES = {
   back: '<path d="M15 18l-6-6 6-6"/>', plus: '<path d="M12 5v14M5 12h14"/>', check: '<path d="M20 6L9 17l-5-5"/>', x: '<path d="M18 6L6 18M6 6l12 12"/>',
   chevron: '<path d="M9 18l6-6-6-6"/>',
+  wifi: '<path d="M2 8.8a15 15 0 0 1 20 0M5 12.6a10 10 0 0 1 14 0M8.5 16.4a5 5 0 0 1 7 0"/><path d="M12 20h.01"/><path d="M3 3l18 18"/>',
   camera: '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3.2"/>',
   mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4"/>',
   ia: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 3v4M17 5h4M5 17v3M3.5 18.5h3"/>',
@@ -255,16 +256,33 @@ function emailDoUsuario(u) {
 }
 
 async function SupaStore() {
-  const { createClient } = await import("https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm");
-  const sb = createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: true } });
+  const { createClient } = await import(CFG.SUPABASE_JS || "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm");
+  // Com sinal fraco a requisição pode ficar "pendurada": corta e deixa o modo sem internet assumir
+  const fetchComTempo = (url, opt = {}) => {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), /\/storage\/v1\/object/.test(String(url)) ? 90000 : 15000);
+    if (opt.signal) opt.signal.addEventListener("abort", () => ctl.abort());
+    return fetch(url, { ...opt, signal: ctl.signal }).finally(() => clearTimeout(t));
+  };
+  const sb = createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, { auth: { persistSession: true }, global: { fetch: fetchComTempo } });
   const urlCache = {};
   let eu = null;
   const ok = ({ data, error }) => { if (error) throw new Error(error.message); return data; };
-  const meuPerfil = async () => {
-    const { data: { user } } = await sb.auth.getUser();
+  // Usuário da sessão guardada no celular (funciona sem internet)
+  const usuarioGuardado = () => {
+    try {
+      const k = Object.keys(localStorage).find((x) => /^sb-.*-auth-token$/.test(x));
+      return k ? JSON.parse(localStorage.getItem(k)).user || null : null;
+    } catch (e) { return null; }
+  };
+  const meuPerfil = async (userDado) => {
+    let user = userDado;
+    if (!user) { const { data } = await sb.auth.getSession(); user = data.session?.user || null; }
     if (!user) return null;
-    const { data } = await sb.from("perfis").select("*").eq("id", user.id).maybeSingle();
-    eu = data || { id: user.id, nome: user.email, papel: "vistoriador" };
+    let perfil = null;
+    try { const r = await sb.from("perfis").select("*").eq("id", user.id).maybeSingle(); if (r.error) throw r.error; perfil = r.data; localStorage.setItem("vistoria-eu", JSON.stringify(perfil)); }
+    catch (e) { try { const g = JSON.parse(localStorage.getItem("vistoria-eu") || "null"); if (g && g.id === user.id) perfil = g; } catch (er) { /* sem perfil guardado */ } }
+    eu = perfil ? { ...perfil } : { id: user.id, nome: (user.user_metadata && user.user_metadata.nome) || user.email, papel: "vistoriador" };
     eu.email = user.email; eu.usuario = (user.email || "").split("@")[0];
     eu.trocar = !!(user.user_metadata && user.user_metadata.trocar_senha); return eu;
   };
@@ -280,7 +298,12 @@ async function SupaStore() {
   }
   return {
     demo: false, sb,
-    async session() { const { data } = await sb.auth.getSession(); return data.session ? meuPerfil() : null; },
+    async session() {
+      let user = null;
+      try { const { data } = await sb.auth.getSession(); user = data.session?.user || null; } catch (e) { /* sem internet */ }
+      if (!user && !navigator.onLine) user = usuarioGuardado(); // sessão vencida e sem sinal: segue com o usuário guardado
+      return user ? meuPerfil(user) : null;
+    },
     async signIn(usuario, senha) { ok(await sb.auth.signInWithPassword({ email: emailDoUsuario(usuario), password: senha })); return meuPerfil(); },
     async trocarSenha(nova) { ok(await sb.auth.updateUser({ password: nova, data: { trocar_senha: false } })); return meuPerfil(); },
     async signOut() { await sb.auth.signOut(); },
@@ -324,6 +347,22 @@ async function SupaStore() {
       if (o.fotos?.length) await sb.storage.from("fotos").remove(o.fotos);
       ok(await sb.from("ocorrencias").delete().eq("id", id));
     },
+    // Executa uma alteração da fila do modo sem internet (pode repetir sem duplicar)
+    async executar(op) {
+      for (const f of op.fotos || []) ok(await sb.storage.from("fotos").upload(f.path, f.blob, { contentType: "image/jpeg", upsert: true }));
+      if (op.tipo === "vist_ins") {
+        ok(await sb.from("vistorias").upsert(op.dados, { onConflict: "id" }));
+        ok(await sb.from("unidades").update({ status: "em_vistoria" }).eq("id", op.dados.unidade_id));
+      } else if (op.tipo === "vist_upd") ok(await sb.from("vistorias").update(op.patch).eq("id", op.id));
+      else if (op.tipo === "uni_status") ok(await sb.from("unidades").update({ status: op.status }).eq("id", op.id));
+      else if (op.tipo === "occ_ins") ok(await sb.from("ocorrencias").upsert(op.dados, { onConflict: "id" }));
+      else if (op.tipo === "occ_upd") ok(await sb.from("ocorrencias").update(op.patch).eq("id", op.id));
+      else if (op.tipo === "occ_del") {
+        if (op.remover?.length) await sb.storage.from("fotos").remove(op.remover);
+        ok(await sb.from("ocorrencias").delete().eq("id", op.id));
+      } else throw new Error("Tipo desconhecido: " + op.tipo);
+    },
+    get euId() { return eu?.id; },
     async fotoUrls(paths) {
       const falta = paths.filter((p) => !urlCache[p]);
       if (falta.length) {
@@ -359,6 +398,212 @@ async function SupaStore() {
       return () => sb.removeChannel(c);
     },
   };
+}
+
+// =====================================================================
+// MODO SEM INTERNET
+// O celular guarda uma cópia dos dados (IndexedDB). Toda alteração entra numa fila e sobe
+// sozinha quando o sinal volta. A tela sempre mostra a cópia local + o que está na fila.
+// =====================================================================
+const ehErroRede = (e) => !navigator.onLine || /failed to fetch|load failed|networkerror|network request failed|abort|timeout|tempo esgotado/i.test(String((e && (e.message || e.name)) || e));
+const dormir = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function abrirIDB() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open("vistoria-offline", 1);
+    r.onupgradeneeded = () => { const d = r.result; d.createObjectStore("fila", { keyPath: "seq", autoIncrement: true }); d.createObjectStore("espelho"); };
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+function idbReq(db, store, modo, fn) {
+  return new Promise((res, rej) => {
+    const tx = db.transaction(store, modo); let out;
+    const req = fn(tx.objectStore(store));
+    if (req) req.onsuccess = () => (out = req.result);
+    tx.oncomplete = () => res(out); tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error);
+  });
+}
+
+async function ComOffline(R) {
+  let db;
+  try { db = await abrirIDB(); } catch (e) { console.warn("Sem IndexedDB: modo sem internet desligado", e); return R; }
+  const TABS = ["perfis", "empreendimentos", "unidades", "vistorias", "ocorrencias", "agendamentos", "base"];
+  const M = {};
+  for (const t of TABS) M[t] = (await idbReq(db, "espelho", "readonly", (s) => s.get(t))) || [];
+  let fila = (await idbReq(db, "fila", "readonly", (s) => s.getAll())) || [];
+  let enviando = false, semServidor = false;
+  const ouvintes = new Set();
+  const estado = () => ({ online: navigator.onLine && !semServidor, pendentes: fila.length, enviando, erro: fila[0] && fila[0].erros >= 3 ? fila[0].ultimoErro || "erro" : "" });
+  const avisar = () => { const st = estado(); ouvintes.forEach((f) => { try { f(st); } catch (e) { console.error(e); } }); };
+
+  // ---- espelho local
+  const tSalvar = {};
+  const salvarTab = (t) => { clearTimeout(tSalvar[t]); tSalvar[t] = setTimeout(() => idbReq(db, "espelho", "readwrite", (s) => s.put(M[t], t)).catch(console.error), 300); };
+  const porId = (t, id) => M[t].find((r) => r.id === id);
+  const upsertM = (t, row) => { const i = M[t].findIndex((r) => r.id === row.id); if (i >= 0) M[t][i] = { ...M[t][i], ...row }; else M[t].push({ ...row }); salvarTab(t); };
+  const patchM = (t, id, patch) => { const r = porId(t, id); if (r) Object.assign(r, patch); salvarTab(t); };
+  const removerM = (t, id) => { M[t] = M[t].filter((r) => r.id !== id); salvarTab(t); };
+  function aplicar(op) {
+    if (op.tipo === "vist_ins") { upsertM("vistorias", op.dados); patchM("unidades", op.dados.unidade_id, { status: "em_vistoria" }); }
+    else if (op.tipo === "vist_upd") patchM("vistorias", op.id, op.patch);
+    else if (op.tipo === "uni_status") patchM("unidades", op.id, { status: op.status });
+    else if (op.tipo === "occ_ins") upsertM("ocorrencias", op.dados);
+    else if (op.tipo === "occ_upd") patchM("ocorrencias", op.id, op.patch);
+    else if (op.tipo === "occ_del") removerM("ocorrencias", op.id);
+  }
+  // fotos que ainda não subiram aparecem direto do celular
+  const fotoLocal = {};
+  const indexarFotos = (op) => (op.fotos || []).forEach((f) => { if (!fotoLocal[f.path]) fotoLocal[f.path] = URL.createObjectURL(f.blob); });
+  fila.forEach(indexarFotos);
+
+  // ---- leitura: internet (até 6 s) ou cópia local; a fila é reaplicada por cima
+  async function ler(t, rede, filtro) {
+    if (navigator.onLine) {
+      const p = rede().then((rows) => {
+        M[t] = M[t].filter((r) => !filtro(r)).concat(rows.map((r) => ({ ...r })));
+        fila.forEach(aplicar); salvarTab(t);
+        if (semServidor) { semServidor = false; avisar(); sincronizar(); }
+      });
+      try { await Promise.race([p, dormir(6000).then(() => { throw new Error("tempo esgotado"); })]); }
+      catch (e) {
+        if (!ehErroRede(e)) throw e;
+        p.catch(() => null);
+        if (!semServidor) { semServidor = true; avisar(); }
+      }
+    }
+    return M[t].filter(filtro).map((r) => ({ ...r }));
+  }
+  const ordem = (campos) => (a, b) => { for (const [c, d] of campos) { const x = String(a[c] ?? ""), y = String(b[c] ?? ""); if (x !== y) return (x < y ? -1 : 1) * d; } return 0; };
+
+  // ---- fila de envio
+  async function enfileirar(op) {
+    op.criado = Date.now(); op.erros = 0;
+    aplicar(op); indexarFotos(op);
+    op.seq = await idbReq(db, "fila", "readwrite", (s) => s.add(op));
+    fila.push(op); avisar();
+    sincronizar();
+  }
+  async function sincronizar(manual = false) {
+    if (enviando || !fila.length || !navigator.onLine) { avisar(); return; }
+    if (fila[0].erros >= 3 && !manual) { avisar(); return; }
+    if (manual) fila[0].erros = 0;
+    enviando = true; avisar();
+    try {
+      while (fila.length && navigator.onLine) {
+        const op = fila[0];
+        try { await R.executar(op); }
+        catch (e) {
+          if (ehErroRede(e)) { semServidor = true; break; }
+          op.erros = (op.erros || 0) + 1; op.ultimoErro = e.message;
+          await idbReq(db, "fila", "readwrite", (s) => s.put(op));
+          if (op.erros >= 3) break;
+          await dormir(2000); continue;
+        }
+        semServidor = false;
+        await idbReq(db, "fila", "readwrite", (s) => s.delete(op.seq));
+        fila.shift(); avisar();
+      }
+    } finally { enviando = false; avisar(); }
+  }
+  window.addEventListener("online", () => { semServidor = false; sincronizar(); });
+  window.addEventListener("offline", avisar);
+  setInterval(() => { semServidor = false; sincronizar(); }, 20000);
+
+  async function prepararFotos(empId, unidadeId, blobs) {
+    const out = [];
+    for (const b of blobs || []) out.push({ path: `${empId}/${unidadeId}/${uid()}.jpg`, blob: await comprimir(b) });
+    return out;
+  }
+  const precisaRede = (fn) => async (...a) => {
+    if (!navigator.onLine) throw new Error("Sem internet. Isso só funciona com conexão.");
+    return fn(...a);
+  };
+
+  const W = {
+    demo: false, sb: R.sb, offline: true,
+    // sessão e conta
+    session: () => R.session(),
+    signIn: precisaRede((u, s) => R.signIn(u, s)),
+    trocarSenha: precisaRede((n) => R.trocarSenha(n)),
+    async signOut() {
+      if (fila.length) throw new Error(`Ainda há ${fila.length} alteração(ões) aguardando envio. Conecte-se à internet antes de sair.`);
+      await R.signOut().catch(() => null);
+      for (const t of TABS) M[t] = [];
+      await idbReq(db, "espelho", "readwrite", (s) => s.clear()).catch(() => null);
+      localStorage.removeItem("vistoria-eu");
+    },
+    // leituras
+    perfis: () => ler("perfis", () => R.perfis(), () => true),
+    empreendimentos: async () => (await ler("empreendimentos", () => R.empreendimentos(), () => true)).sort(ordem([["nome", 1]])),
+    unidades: (empId) => ler("unidades", () => R.unidades(empId), (r) => r.empreendimento_id === empId),
+    unidade: async (id) => (await ler("unidades", async () => { const u = await R.unidade(id); return u ? [u] : []; }, (r) => r.id === id))[0] || null,
+    agenda: async (empId) => (await ler("agendamentos", () => R.agenda(empId), (r) => r.empreendimento_id === empId)).sort(ordem([["data", 1], ["hora", 1]])),
+    async vistoriaAberta(unidadeId) {
+      const vs = await ler("vistorias", async () => { const v = await R.vistoriaAberta(unidadeId); return v ? [v] : []; }, (r) => r.unidade_id === unidadeId);
+      return vs.sort(ordem([["iniciada_em", -1]]))[0] || null;
+    },
+    vistoriasEmp: (empId) => ler("vistorias", () => R.vistoriasEmp(empId), (r) => r.empreendimento_id === empId),
+    ocorrenciasEmp: async (empId) => (await ler("ocorrencias", () => R.ocorrenciasEmp(empId), (r) => r.empreendimento_id === empId)).sort(ordem([["criado_em", -1]])),
+    ocorrenciasUnidade: async (unidadeId) => (await ler("ocorrencias", () => R.ocorrenciasUnidade(unidadeId), (r) => r.unidade_id === unidadeId)).sort(ordem([["criado_em", 1]])),
+    base: async () => (await ler("base", () => R.base(), () => true)).sort(ordem([["area", 1], ["problema", 1]])),
+    async precarregar(empId) {
+      if (!navigator.onLine) return;
+      await Promise.all([W.perfis(), W.unidades(empId), W.agenda(empId), W.vistoriasEmp(empId), W.ocorrenciasEmp(empId), W.base()]).catch(console.error);
+    },
+    // alterações (funcionam sem internet)
+    async iniciarVistoria(u, acompanhante) {
+      const dados = { id: uid(), unidade_id: u.id, empreendimento_id: u.empreendimento_id, vistoriador_id: R.euId || null, acompanhante, observacoes: "", chaves: "", prazo_reparo: null, status: "em_andamento", iniciada_em: new Date().toISOString(), concluida_em: null };
+      await enfileirar({ tipo: "vist_ins", dados });
+      return { ...dados };
+    },
+    async atualizarVistoria(id, patch) { await enfileirar({ tipo: "vist_upd", id, patch }); return { ...(porId("vistorias", id) || { id }) }; },
+    async statusUnidade(id, status) { await enfileirar({ tipo: "uni_status", id, status }); },
+    async novaOcorrencia(o, blobs) {
+      const fotos = await prepararFotos(o.empreendimento_id, o.unidade_id, blobs);
+      const agora = new Date().toISOString();
+      const dados = { ...o, id: uid(), fotos: fotos.map((f) => f.path), criado_por: R.euId || null, criado_em: agora, atualizado_em: agora };
+      await enfileirar({ tipo: "occ_ins", dados, fotos });
+      return { ...dados };
+    },
+    async atualizarOcorrencia(id, patch, novasFotos = []) {
+      const atual = porId("ocorrencias", id) || {};
+      const fotos = await prepararFotos(atual.empreendimento_id, atual.unidade_id, novasFotos);
+      const p = { ...patch, atualizado_por: R.euId || null, atualizado_em: new Date().toISOString() };
+      if (fotos.length) p.fotos = [...(patch.fotos || atual.fotos || []), ...fotos.map((f) => f.path)];
+      await enfileirar({ tipo: "occ_upd", id, patch: p, fotos });
+      return { ...(porId("ocorrencias", id) || { id }) };
+    },
+    async apagarOcorrencia(id) { const o = porId("ocorrencias", id); await enfileirar({ tipo: "occ_del", id, remover: (o && o.fotos) || [] }); },
+    async fotoUrls(paths) {
+      const r = {}, rede = paths.filter((p) => !fotoLocal[p]);
+      let u = {};
+      if (rede.length && navigator.onLine) { try { u = await R.fotoUrls(rede); } catch (e) { /* sem internet */ } }
+      paths.forEach((p) => (r[p] = fotoLocal[p] || u[p] || ""));
+      return r;
+    },
+    async sugerir(p) {
+      if (!CFG.IA || !navigator.onLine) return sugestaoLocal(await W.base(), p.area, p.descricao);
+      return R.sugerir(p);
+    },
+    // só com internet (cadastros e administração)
+    salvarUnidades: precisaRede((e, r) => R.salvarUnidades(e, r)),
+    apagarUnidade: precisaRede((id) => R.apagarUnidade(id)),
+    salvarEmp: precisaRede((id, p) => R.salvarEmp(id, p)),
+    salvarBase: precisaRede((i) => R.salvarBase(i)),
+    assinar: (empId, fn) => R.assinar(empId, fn),
+    // estado da fila
+    estado, sincronizar,
+    aoMudar(fn) { ouvintes.add(fn); fn(estado()); return () => ouvintes.delete(fn); },
+    pendente: (id) => fila.some((op) => op.id === id || (op.dados && op.dados.id === id)),
+    errosFila: () => fila.filter((op) => op.erros >= 3).map((op) => ({ seq: op.seq, tipo: op.tipo, erro: op.ultimoErro })),
+    async descartarPrimeiro() {
+      const op = fila[0]; if (!op) return;
+      await idbReq(db, "fila", "readwrite", (s) => s.delete(op.seq));
+      fila.shift(); avisar(); sincronizar();
+    },
+  };
+  return W;
 }
 
 // =====================================================================
@@ -400,7 +645,7 @@ function menuConta() {
     `<button class="btn" data-close>Fechar</button><button class="btn dark" id="btnSair">Sair</button>`,
     (el, fechar) => {
       $("#selEmp", el).onchange = (e) => { EMP = EMPS.find((x) => x.id === e.target.value); localStorage.setItem("vistoria-emp", EMP.id); fechar(); rotear(); };
-      $("#btnSair", el).onclick = async () => { await S.signOut(); EU = null; fechar(); go("#/"); };
+      $("#btnSair", el).onclick = async () => { try { await S.signOut(); EU = null; fechar(); go("#/"); } catch (e) { toast(e.message, 5000); } };
       const bs = $("#btnSenha", el); if (bs) bs.onclick = () => { fechar(); telaTrocarSenha(false); };
       const r = $("#btnReset", el); if (r) r.onclick = async () => { if (await confirmar("Apagar todos os dados de teste deste navegador?", "Apagar")) S.resetar(); };
     });
@@ -520,6 +765,7 @@ async function posLogin() {
   const salvo = localStorage.getItem("vistoria-emp");
   EMP = EMPS.find((e) => e.id === salvo) || EMPS.find((e) => e.nome === CFG.EMPREENDIMENTO_PADRAO) || EMPS[0] || null;
   (await S.perfis()).forEach((p) => (PERFIS[p.id] = p));
+  if (EMP && S.precarregar) S.precarregar(EMP.id); // guarda tudo no celular para usar sem sinal
   if ((!location.hash || location.hash === "#/") && EU.papel === "engenheiro") go("#/painel");
   else rotear();
 }
@@ -646,7 +892,7 @@ async function cardsOcorrencias(lista, { modo = "vistoria", novos = new Set(), u
       <div class="body">
         <div class="meta">${u ? `<b style="color:var(--ink)">${esc(unidadeNome(u))}</b> · ` : ""}${esc(o.comodo)} · ${esc(o.area)} · ${fmtHora(o.criado_em)}${quem && modo !== "vistoria" ? " · " + esc(quem) : ""}</div>
         <div class="desc">${esc(o.descricao)}</div>
-        <div class="row wrap" style="gap:6px"><span class="tag ${o.status}">${ST_OCC[o.status]}${o.status === "equipe_acionada" && o.equipe ? ": " + esc(o.equipe) : ""}</span><span class="tag ${o.gravidade}">Gravidade ${o.gravidade === "media" ? "média" : o.gravidade}</span>${o.resolve_na_hora && o.status === "aberta" ? `<span class="tag resolvida">Dá para resolver hoje</span>` : ""}${o.corriqueiro === false ? `<span class="tag alta">Precisa aprovação Eng./Adm.</span>` : ""}</div>
+        <div class="row wrap" style="gap:6px"><span class="tag ${o.status}">${ST_OCC[o.status]}${o.status === "equipe_acionada" && o.equipe ? ": " + esc(o.equipe) : ""}</span><span class="tag ${o.gravidade}">Gravidade ${o.gravidade === "media" ? "média" : o.gravidade}</span>${o.resolve_na_hora && o.status === "aberta" ? `<span class="tag resolvida">Dá para resolver hoje</span>` : ""}${o.corriqueiro === false ? `<span class="tag alta">Precisa aprovação Eng./Adm.</span>` : ""}${S.pendente && S.pendente(o.id) ? `<span class="tag fila">Aguardando envio</span>` : ""}</div>
         ${o.sugestao ? `<div class="sug">${ic("ia","sm")}<span>${esc(o.sugestao)}</span></div>` : ""}
         <div class="acts">${acts}</div>
       </div></div>`;
@@ -1155,12 +1401,51 @@ async function telaTermo(unidadeId) {
 }
 
 // =====================================================================
+// APP INSTALÁVEL + BARRA DE CONEXÃO
+// =====================================================================
+function registrarApp() {
+  try {
+    if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost") && !DEMO) navigator.serviceWorker.register("sw.js").catch((e) => console.warn("SW", e));
+  } catch (e) { /* navegador sem suporte */ }
+}
+let redeAnterior = { pendentes: 0, online: true };
+let tRedeOk = null;
+function barraRede(st) {
+  const el = $("#rede"); if (!el) return;
+  const mostrar = (cls, html) => { el.className = "rede " + cls; el.innerHTML = html; };
+  clearTimeout(tRedeOk);
+  if (st.erro) mostrar("erro", `${ic("alerta", "sm")} Uma alteração não foi aceita pelo servidor · toque para ver`);
+  else if (!st.online) mostrar("off", `${ic("wifi", "sm")} Sem internet · ${st.pendentes ? `${st.pendentes} alteração(ões) guardada(s) no celular` : "tudo salvo no celular"}`);
+  else if (st.pendentes) mostrar("env", `<span class="spin"></span> Enviando ${st.pendentes} alteração(ões)…`);
+  else if (redeAnterior.pendentes || !redeAnterior.online) { mostrar("ok", `${ic("check", "sm")} Tudo enviado`); tRedeOk = setTimeout(() => (el.className = "rede hidden"), 2500); }
+  else el.className = "rede hidden";
+  redeAnterior = st;
+  el.onclick = detalhesRede;
+}
+function detalhesRede() {
+  if (!S || !S.estado) return;
+  const st = S.estado(), erros = S.errosFila();
+  const nomes = { vist_ins: "início de vistoria", vist_upd: "atualização de vistoria", uni_status: "situação da unidade", occ_ins: "nova ocorrência", occ_upd: "alteração de ocorrência", occ_del: "exclusão de ocorrência" };
+  sheet(`<h3>Envio para o servidor</h3>`, `
+    <div class="card"><b>${st.online ? "Com internet" : "Sem internet"}</b><div class="muted small">${st.pendentes ? `${st.pendentes} alteração(ões) aguardando envio. Elas ficam guardadas no celular e sobem sozinhas quando o sinal voltar.` : "Nada aguardando envio."}</div></div>
+    ${erros.length ? `<div class="card" style="border-color:rgba(255,93,82,.4)"><b style="color:var(--red)">O servidor recusou: ${esc(nomes[erros[0].tipo] || erros[0].tipo)}</b><div class="muted small">${esc(erros[0].erro || "")}</div><p class="small">Tente de novo. Se continuar, mostre esta mensagem ao Eduardo antes de descartar.</p></div>` : ""}
+    <p class="muted small">Dica: não feche o navegador nem saia do sistema enquanto houver alterações aguardando envio.</p>`,
+    `<button class="btn" data-close>Fechar</button>${erros.length ? `<button class="btn danger" id="rdDesc">Descartar</button>` : ""}<button class="btn primary" id="rdTent">Enviar agora</button>`,
+    (el, fechar) => {
+      $("#rdTent", el).onclick = () => { S.sincronizar(true); fechar(); };
+      const d = $("#rdDesc", el); if (d) d.onclick = async () => { if (!(await confirmar("Descartar esta alteração? Ela não vai para o servidor.", "Descartar"))) return; await S.descartarPrimeiro(); fechar(); rotear(); };
+    });
+}
+
+// =====================================================================
 // INÍCIO
 // =====================================================================
 (async function iniciar() {
   try {
-    S = DEMO ? DemoStore() : await SupaStore();
+    registrarApp();
+    S = DEMO ? DemoStore() : await ComOffline(await SupaStore());
     if (S.demo) $("#demoBar").classList.remove("hidden");
+    if (S.aoMudar) S.aoMudar(barraRede);
     EU = await S.session();
     if (EU) await posLogin(); else rotear();
     window.addEventListener("hashchange", rotear);
