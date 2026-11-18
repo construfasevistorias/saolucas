@@ -19,7 +19,7 @@ function corriqueiroLocal(area, texto) {
   if (area === "Esquadrias e portas") return /fechadur|janela|infiltr|veda|chave|porta|regul|trilho|ma[cç]aneta/i.test(texto || "");
   return false;
 }
-// A agenda usa apelidos/primeiros nomes ("Dudu", "Junior/João Victor"): confere com o nome do perfil
+// A agenda usa primeiros nomes ("Ricardo", "Junior/João Victor"): confere com o nome do perfil
 const ehMeu = (a) => !!(a.responsavel && EU && norm(a.responsavel).split("/").some((p) => { const w = p.trim().split(/\s+/)[0]; return w && norm(EU.nome).split(/[^a-z0-9]+/).includes(w); }));
 const comodosDe = (u) => [...((u && u.comodos && u.comodos.length) ? u.comodos : COMODOS.filter((c) => c !== "Unidade toda")), "Unidade toda"];
 const hojeISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
@@ -171,7 +171,7 @@ function DemoStore() {
       vistorias: [], ocorrencias: [], fotos: {}, agendamentos: [],
       base: (window.BASE_SOLUCOES || []).map((b) => ({ id: uid(), ativo: true, ...b })),
       perfis: [
-        { id: "demo-adm", nome: "Eduardo (Dudu)", papel: "admin" },
+        { id: "demo-adm", nome: "Eduardo", papel: "admin" },
         { id: "demo-eng1", nome: "Renata", papel: "engenheiro" },
         { id: "demo-eng2", nome: "Maria Eduarda", papel: "engenheiro" },
         ...["Ricardo", "Henrique", "Wesley", "Junior", "João Victor", "Gabriel", "Mario André", "Ana"].map((n, i) => ({ id: "demo-v" + i, nome: n, papel: "vistoriador" })),

@@ -12,7 +12,7 @@
 -- =====================================================================
 with cfg as (select 'TROQUE-AQUI'::text as senha, 'vistoria.construfase.com.br'::text as dominio),
 equipe(usuario, nome, papel) as (values
-  ('eduardo',  'Eduardo (Dudu)', 'admin'),
+  ('eduardo',  'Eduardo', 'admin'),
   ('renata',   'Renata',         'engenheiro'),
   ('maria',    'Maria Eduarda',  'engenheiro'),
   ('ricardo',  'Ricardo',        'vistoriador'),
@@ -46,9 +46,9 @@ select gen_random_uuid(), u.id, u.id::text,
        'email', now(), now(), now()
 from u;
 
--- Nome e papel de cada um (o nome tem que conter o nome usado na agenda, ex.: "Dudu")
+-- Nome e papel de cada um (o nome tem que conter o nome usado na agenda)
 with equipe(usuario, nome, papel) as (values
-  ('eduardo','Eduardo (Dudu)','admin'), ('renata','Renata','engenheiro'), ('maria','Maria Eduarda','engenheiro'),
+  ('eduardo','Eduardo','admin'), ('renata','Renata','engenheiro'), ('maria','Maria Eduarda','engenheiro'),
   ('ricardo','Ricardo','vistoriador'), ('henrique','Henrique','vistoriador'), ('wesley','Wesley','vistoriador'),
   ('junior','Junior','vistoriador'), ('joao','João Victor','vistoriador'), ('gabriel','Gabriel','vistoriador'),
   ('mario','Mario André','vistoriador'), ('ana','Ana','vistoriador')

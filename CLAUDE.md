@@ -50,13 +50,13 @@ cliente vai ao escritório da obra assinar o termo. O engenheiro não vê nada e
   - Finais 01/02: 3 dorm. c/ suíte (+ circulação) · Finais 03–06: 2 dorm. c/ suíte
   - Finais 07/08: dormitório casal (planta chama de "Suíte", mas não tem banheiro) + dormitório 1, 1 BWC · Finais 09/10: 2 dorm.
   - Coberturas: terraço, área de serviço, suíte, 2 dorm., 2 BWC (502/504: BWC suíte PCD)
-- Agenda de entrega: 23 a 27/11/2026, duas equipes, vistoriadores por coluna (Dudu, Ricardo...).
+- Agenda de entrega: 23 a 27/11/2026, duas equipes, vistoriadores por coluna (Eduardo, Ricardo...). Na planilha o Eduardo aparece por apelido; o `gerar_carga.py` troca para "Eduardo". Não usar o apelido em nada no sistema (pedido do Eduardo).
 - **Dados pessoais (nomes, telefones) ficam só no Supabase.** `dados/` está no `.gitignore`;
   `dados/gerar_carga.py` gera `dados/sao-lucas-carga.sql` a partir das planilhas
   (Controle de Vendas e Agenda). Nunca subir CPF, valores ou dados de venda.
 
 ## Equipe (perfis)
-- Admin: Eduardo ("Dudu" na agenda) · Engenheiras: Renata, Maria Eduarda
+- Admin: Eduardo · Engenheiras: Renata, Maria Eduarda
 - Vistoriadores (estagiários que acompanham a vistoria): Ricardo, Henrique, Wesley, Junior, João Victor,
   Gabriel, Mario André, Ana. A agenda usa esses nomes; `ehMeu()` liga a agenda ao usuário logado.
 - Logins curtos, só para o sistema: o usuário digita `ricardo` e o app completa `@vistoria.construfase.com.br`

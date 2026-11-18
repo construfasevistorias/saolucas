@@ -13,7 +13,7 @@ São cerca de 30 minutos, uma vez só. Depois disso, o sistema roda sozinho.
 
    | Usuário | Pessoa | Papel |
    |---|---|---|
-   | eduardo | Eduardo (Dudu) | Administrador |
+   | eduardo | Eduardo | Administrador |
    | renata · maria | Renata · Maria Eduarda | Engenharia |
    | ricardo · henrique · wesley · junior · joao · gabriel · mario · ana | Estagiários | Vistoriador(a) |
 
