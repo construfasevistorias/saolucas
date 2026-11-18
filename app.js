@@ -31,6 +31,7 @@ const PAPEIS = { vistoriador: "Vistoriador(a)", engenheiro: "Engenharia", admin:
 const ICONES = {
   back: '<path d="M15 18l-6-6 6-6"/>', plus: '<path d="M12 5v14M5 12h14"/>', check: '<path d="M20 6L9 17l-5-5"/>', x: '<path d="M18 6L6 18M6 6l12 12"/>',
   chevron: '<path d="M9 18l6-6-6-6"/>',
+  relatorio: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 18v-3M12 18v-6M16 18v-4"/>',
   wifi: '<path d="M2 8.8a15 15 0 0 1 20 0M5 12.6a10 10 0 0 1 14 0M8.5 16.4a5 5 0 0 1 7 0"/><path d="M12 20h.01"/><path d="M3 3l18 18"/>',
   camera: '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3.2"/>',
   mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4"/>',
@@ -699,6 +700,7 @@ async function rotear() {
     if (rota === "painel") return telaPainel();
     if (rota === "base") return telaBase();
     if (rota === "termo" && arg && CFG.TERMO_IMPRESSO) return telaTermo(arg);
+    if (rota === "relatorio") return telaRelatorio();
     if (rota === "cadastro") return telaCadastro();
     return telaInicio();
   } catch (e) {
@@ -807,9 +809,158 @@ async function telaInicio() {
     <div class="grid g2">
       ${item("#/unidades", "vistoria", "Fazer vistoria", "Agenda do dia, unidades e ocorrências com o cliente")}
       ${item("#/painel", "painel", "Painel do engenheiro", "Mapa dos blocos e ocorrências em tempo real")}
+      ${EU.papel !== "vistoriador" ? item("#/relatorio", "relatorio", "Relatórios", "Resumo do dia e relatório geral em PDF") : ""}
       ${item("#/base", "base", "Base de soluções", "Problemas comuns e como resolver")}
       ${item("#/cadastro", "predio", "Unidades e proprietários", "Cadastro e importação da planilha")}
     </div>`);
+}
+
+// ---------------------------------------------------------- relatórios (resumo do dia e geral) → PDF
+const dataLocalISO = (iso) => { const d = new Date(iso); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+const PERIODOS = { manha: "Manhã (até 12h)", tarde: "Tarde (a partir das 12h)", dia: "Dia todo" };
+const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
+function contar(lista, chave) {
+  const m = {}; lista.forEach((x) => { const k = typeof chave === "function" ? chave(x) : x[chave]; if (k) m[k] = (m[k] || 0) + 1; });
+  return Object.entries(m).sort((a, b) => b[1] - a[1]);
+}
+function barras(pares, total, max = 12) {
+  if (!pares.length) return `<p class="vazio">Nenhum registro.</p>`;
+  const topo = pares[0][1];
+  return `<table class="barras">${pares.slice(0, max).map(([k, n]) => `<tr><td class="k">${esc(k)}</td><td class="b"><span style="width:${Math.max(3, pct(n, topo))}%"></span></td><td class="n">${n}</td><td class="p">${pct(n, total)}%</td></tr>`).join("")}</table>`;
+}
+const situacaoOcc = (o) => o.status === "equipe_acionada" ? `Equipe acionada${o.equipe ? ": " + o.equipe : ""}` : ST_OCC[o.status] || o.status;
+
+async function telaRelatorio() {
+  topo({ titulo: "Relatórios", sub: EMP.nome, voltar: "#/" });
+  rodape("");
+  const [us, os, vs, ag] = await Promise.all([S.unidades(EMP.id), S.ocorrenciasEmp(EMP.id), S.vistoriasEmp(EMP.id), S.agenda(EMP.id)]);
+  const uMap = {}; us.forEach((u) => (uMap[u.id] = u));
+  const datasAg = [...new Set(ag.map((a) => a.data))].sort();
+  const hoje = hojeISO();
+  const f = {
+    tipo: sessionStorage.getItem("rel-tipo") || "dia",
+    data: hoje, periodo: new Date().getHours() < 13 ? "manha" : "dia",
+    de: datasAg[0] || hoje, ate: datasAg[datasAg.length - 1] || hoje, fotos: false,
+  };
+  app(`<div class="noprint">
+    <div class="opts two" id="rTipo">
+      <button class="opt ${f.tipo === "dia" ? "on" : ""}" data-t="dia">${ic("agenda")}<span>Resumo do dia</span></button>
+      <button class="opt ${f.tipo === "geral" ? "on" : ""}" data-t="geral">${ic("painel")}<span>Relatório geral</span></button>
+    </div>
+    <div class="card" id="rFiltros"></div>
+    <button class="btn primary block" id="rPdf">${ic("impressora")} Salvar em PDF</button>
+    <p class="muted small" style="margin:8px 2px 16px">No celular: toque em <b>Salvar em PDF</b> e, na tela de impressão, escolha <b>Salvar como PDF</b>. Depois é só mandar no WhatsApp ou e-mail.</p>
+  </div>
+  <div id="rel"></div>`);
+
+  function filtros() {
+    $("#rFiltros").innerHTML = f.tipo === "dia"
+      ? `<label class="f" for="rData">Dia</label><input class="inp" type="date" id="rData" value="${f.data}">
+         ${datasAg.length ? `<div class="chips" style="margin-top:8px">${datasAg.map((d) => `<span class="chip ${f.data === d ? "on" : ""}" data-d="${d}">${esc(diaSemana(d))}</span>`).join("")}</div>` : ""}
+         <label class="f">Período</label><div class="chips" id="rPer">${Object.entries(PERIODOS).map(([k, t]) => `<span class="chip ${f.periodo === k ? "on" : ""}" data-p="${k}">${t}</span>`).join("")}</div>
+         <label class="f" style="margin-top:12px"><input type="checkbox" id="rFotos" ${f.fotos ? "checked" : ""}> Incluir fotos das pendências</label>`
+      : `<div class="row"><div style="flex:1"><label class="f" for="rDe">De</label><input class="inp" type="date" id="rDe" value="${f.de}"></div>
+         <div style="flex:1"><label class="f" for="rAte">Até</label><input class="inp" type="date" id="rAte" value="${f.ate}"></div></div>
+         <p class="muted small">Padrão: toda a semana de entrega. Mostra quais áreas, cômodos, blocos e tipologias tiveram mais ocorrências.</p>`;
+    const on = (sel, ev, fn) => { const e = $(sel); if (e) e[ev] = fn; };
+    on("#rData", "onchange", (e) => { f.data = e.target.value; filtros(); gerar(); });
+    on("#rDe", "onchange", (e) => { f.de = e.target.value; gerar(); });
+    on("#rAte", "onchange", (e) => { f.ate = e.target.value; gerar(); });
+    on("#rFotos", "onchange", (e) => { f.fotos = e.target.checked; gerar(); });
+    $("#rFiltros").querySelectorAll("[data-d]").forEach((c) => (c.onclick = () => { f.data = c.dataset.d; filtros(); gerar(); }));
+    $("#rFiltros").querySelectorAll("[data-p]").forEach((c) => (c.onclick = () => { f.periodo = c.dataset.p; filtros(); gerar(); }));
+  }
+  $("#rTipo").querySelectorAll("[data-t]").forEach((b) => (b.onclick = () => {
+    f.tipo = b.dataset.t; sessionStorage.setItem("rel-tipo", f.tipo);
+    $("#rTipo").querySelectorAll("[data-t]").forEach((x) => x.classList.toggle("on", x === b));
+    filtros(); gerar();
+  }));
+
+  // dentro do período escolhido?
+  const noPeriodo = (iso) => {
+    if (!iso) return false;
+    const d = dataLocalISO(iso);
+    if (f.tipo === "geral") return d >= f.de && d <= f.ate;
+    if (d !== f.data) return false;
+    const h = new Date(iso).getHours();
+    return f.periodo === "dia" || (f.periodo === "manha" ? h < 12 : h >= 12);
+  };
+  const nomeArquivo = () => f.tipo === "dia"
+    ? `Resumo vistorias ${EMP.nome} ${f.data.split("-").reverse().join("-")} ${f.periodo === "dia" ? "dia todo" : f.periodo === "manha" ? "manha" : "tarde"}`
+    : `Relatorio geral vistorias ${EMP.nome} ${f.de.split("-").reverse().join("-")} a ${f.ate.split("-").reverse().join("-")}`;
+
+  async function gerar() {
+    const occ = os.filter((o) => noPeriodo(o.criado_em));
+    const vIni = vs.filter((v) => noPeriodo(v.iniciada_em));
+    const vFim = vs.filter((v) => v.status === "concluida" && noPeriodo(v.concluida_em));
+    const tocadas = new Set([...vIni, ...vFim].map((v) => v.unidade_id).concat(occ.map((o) => o.unidade_id)));
+    const naHora = occ.filter((o) => o.status === "resolvida_na_hora").length;
+    const pend = occ.filter((o) => o.status === "aberta" || o.status === "equipe_acionada");
+    const concluidasTotal = us.filter((u) => u.status === "concluida").length;
+    const cab = (titulo, sub) => `<div class="th"><img src="img/logo-construfase.png" alt="Construfase"><div style="flex:1"><h1>${titulo}</h1><div class="sub">${sub}</div></div>
+      <div class="small" style="text-align:right">Gerado em ${fmtDataHora(new Date().toISOString())}<br>por ${esc(EU.nome || "")}</div></div>`;
+    const kpi = (n, t) => `<div class="kpi"><b>${n}</b><span>${t}</span></div>`;
+    const ultimaVist = (uid) => vs.filter((v) => v.unidade_id === uid).sort((a, b) => String(b.iniciada_em).localeCompare(String(a.iniciada_em)))[0];
+    let html = "";
+
+    if (f.tipo === "dia") {
+      const agDia = ag.filter((a) => a.data === f.data && (f.periodo === "dia" || (f.periodo === "manha" ? a.hora < "12:00" : a.hora >= "12:00")));
+      const linhasUni = [...tocadas].map((id) => uMap[id]).filter(Boolean).sort(sortUnidades).map((u) => {
+        const v = ultimaVist(u.id); const oU = occ.filter((o) => o.unidade_id === u.id);
+        return `<tr><td><b>${esc(unidadeNome(u))}</b><br><span class="sm">${esc(u.proprietario || "")}</span></td><td>${esc(PERFIS[v?.vistoriador_id]?.nome || "")}</td>
+          <td>${v ? fmtHora(v.iniciada_em) : ""}${v?.concluida_em ? "–" + fmtHora(v.concluida_em) : ""}</td><td class="c">${oU.length}</td><td class="c">${oU.filter((o) => o.status === "resolvida_na_hora").length}</td>
+          <td class="c">${oU.filter((o) => o.status === "aberta" || o.status === "equipe_acionada").length}</td>
+          <td>${v?.status === "concluida" ? (v.chaves === "retidas" ? `Retidas · até ${fmtData(v.prazo_reparo)}` : v.chaves === "entregues" ? "Entregues" : "Concluída") : "Em andamento"}</td></tr>`;
+      }).join("");
+      let fotos = {};
+      if (f.fotos) { const ps = pend.flatMap((o) => (o.fotos || []).slice(0, 2)); if (ps.length) fotos = await S.fotoUrls(ps); }
+      html = `${cab(`Resumo das vistorias · ${esc(EMP.nome)}`, `${esc(diaSemana(f.data).replace(/^./, (c) => c.toUpperCase()))} · ${PERIODOS[f.periodo]}`)}
+        <div class="kpis">${kpi(tocadas.size, "unidades vistoriadas")}${kpi(vFim.length, "vistorias concluídas")}${kpi(occ.length, "ocorrências anotadas")}${kpi(naHora, "resolvidas na hora")}${kpi(pend.length, "pendentes")}${kpi(vFim.filter((v) => v.chaves === "retidas").length, "chaves retidas")}</div>
+        <p class="sm">Andamento da entrega: <b>${concluidasTotal} de ${us.length}</b> unidades concluídas (${pct(concluidasTotal, us.length)}%).</p>
+        ${f.data && agDia.length ? `<h2>Agenda do período</h2><table><tr><th>Hora</th><th>Unidade</th><th>Cliente</th><th>Responsável</th><th>Situação</th></tr>
+          ${agDia.map((a) => { const u = uMap[a.unidade_id]; const v = u && ultimaVist(u.id); const sit = !u ? "" : u.status === "concluida" ? "Concluída" : v ? "Em vistoria" : "Não iniciada";
+            return `<tr><td>${esc(a.hora)}</td><td>${u ? esc(unidadeNome(u)) : ""}</td><td>${esc(a.cliente || u?.proprietario || "")}</td><td>${esc(a.responsavel || "")}</td><td class="${sit === "Não iniciada" ? "alerta" : ""}">${sit}</td></tr>`; }).join("")}</table>` : ""}
+        <h2>Unidades vistoriadas</h2>
+        ${linhasUni ? `<table><tr><th>Unidade</th><th>Vistoriador</th><th>Horário</th><th class="c">Ocorr.</th><th class="c">Na hora</th><th class="c">Pend.</th><th>Chaves</th></tr>${linhasUni}</table>` : `<p class="vazio">Nenhuma vistoria neste período.</p>`}
+        <h2>Ocorrências por área</h2>${barras(contar(occ, "area"), occ.length)}
+        <h2>Pendências para a engenharia (${pend.length})</h2>
+        ${pend.length ? `<table><tr><th>Unidade</th><th>Cômodo · Área</th><th>Descrição</th><th>Grav.</th><th>Situação</th></tr>
+          ${pend.slice().sort((a, b) => sortUnidades(uMap[a.unidade_id] || {}, uMap[b.unidade_id] || {})).map((o) => `<tr><td>${esc(uMap[o.unidade_id] ? unidadeNome(uMap[o.unidade_id]) : "")}</td><td>${esc(o.comodo)} · ${esc(o.area)}</td>
+            <td>${esc(o.descricao)}${o.corriqueiro === false ? ` <i>(fora da lista FS014-02)</i>` : ""}${f.fotos && o.fotos?.length ? `<div class="fotos">${o.fotos.slice(0, 2).map((p) => fotos[p] ? `<img src="${esc(fotos[p])}" alt="">` : "").join("")}</div>` : ""}</td>
+            <td>${o.gravidade === "media" ? "média" : o.gravidade}</td><td>${esc(situacaoOcc(o))}</td></tr>`).join("")}</table>` : `<p class="vazio">Nenhuma pendência. 👏</p>`}`;
+    } else {
+      const vistUni = new Set(vs.filter((v) => noPeriodo(v.iniciada_em)).map((v) => v.unidade_id));
+      const nU = vistUni.size || 1;
+      const porTip = contar(occ, (o) => uMap[o.unidade_id]?.tipologia || "Sem tipologia").map(([k, n]) => {
+        const qtd = [...vistUni].filter((id) => (uMap[id]?.tipologia || "Sem tipologia") === k).length || 1;
+        return [k, n, qtd];
+      });
+      const porBloco = contar(occ, (o) => uMap[o.unidade_id] ? `Bloco ${uMap[o.unidade_id].bloco}` : "");
+      const retidas = vs.filter((v) => v.chaves === "retidas" && v.status === "concluida");
+      const abertas = os.filter((o) => o.status === "aberta" || o.status === "equipe_acionada");
+      html = `${cab(`Relatório geral da entrega · ${esc(EMP.nome)}`, `${fmtData(f.de)} a ${fmtData(f.ate)}`)}
+        <div class="kpis">${kpi(`${concluidasTotal}/${us.length}`, "unidades concluídas")}${kpi(occ.length, "ocorrências")}${kpi((occ.length / nU).toFixed(1).replace(".", ","), "ocorrências por unidade")}${kpi(pct(naHora, occ.length) + "%", "resolvidas na hora")}${kpi(abertas.length, "pendentes hoje")}${kpi(retidas.length, "chaves retidas")}</div>
+        <h2>Principais ocorrências por área</h2>${barras(contar(occ, "area"), occ.length, 20)}
+        <h2>Onde mais aparece (área + cômodo)</h2>${barras(contar(occ, (o) => `${o.area} · ${o.comodo}`), occ.length, 10)}
+        <div class="duas"><div><h2>Por cômodo</h2>${barras(contar(occ, "comodo"), occ.length, 10)}</div><div><h2>Por bloco</h2>${barras(porBloco, occ.length)}</div></div>
+        <h2>Por tipologia</h2>
+        ${porTip.length ? `<table><tr><th>Tipologia</th><th class="c">Ocorrências</th><th class="c">Unid. vistoriadas</th><th class="c">Média por unidade</th></tr>${porTip.map(([k, n, q]) => `<tr><td>${esc(k)}</td><td class="c">${n}</td><td class="c">${q}</td><td class="c">${(n / q).toFixed(1).replace(".", ",")}</td></tr>`).join("")}</table>` : `<p class="vazio">Nenhum registro.</p>`}
+        <div class="duas"><div><h2>Gravidade</h2>${barras(contar(occ, (o) => ({ baixa: "Baixa", media: "Média", alta: "Alta" })[o.gravidade]), occ.length)}</div>
+        <div><h2>Como foi resolvido</h2>${barras(contar(occ, (o) => ST_OCC[o.status]), occ.length)}</div></div>
+        <div class="duas"><div><h2>Equipes acionadas</h2>${barras(contar(occ.filter((o) => o.status === "equipe_acionada" || o.status === "resolvida"), "equipe"), occ.length)}</div>
+        <div><h2>Lista de Serviços Corriqueiros (FS014-02)</h2>${barras([["Na lista", occ.filter((o) => o.corriqueiro !== false).length], ["Fora da lista (aprovação Eng./Adm.)", occ.filter((o) => o.corriqueiro === false).length]].filter((x) => x[1]), occ.length)}</div></div>
+        <h2>Chaves com a Construfase (${retidas.length})</h2>
+        ${retidas.length ? `<table><tr><th>Unidade</th><th>Proprietário</th><th>Concluída em</th><th>Prazo de reparo</th><th class="c">Pendências</th></tr>${retidas.map((v) => { const u = uMap[v.unidade_id] || {}; return `<tr><td>${esc(unidadeNome(u))}</td><td>${esc(u.proprietario || "")}</td><td>${fmtData(dataLocalISO(v.concluida_em))}</td><td>${fmtData(v.prazo_reparo)}</td><td class="c">${abertas.filter((o) => o.unidade_id === v.unidade_id).length}</td></tr>`; }).join("")}</table>` : `<p class="vazio">Nenhuma.</p>`}`;
+    }
+    $("#rel").innerHTML = `<div class="rel">${html}<div class="rodape-rel">Construfase · Sistema de Vistoria de Entrega</div></div>`;
+  }
+  $("#rPdf").onclick = async () => {
+    const t = document.title; document.title = nomeArquivo();
+    await Promise.all([...document.querySelectorAll("#rel img")].map((i) => (i.complete ? null : new Promise((r) => { i.onload = i.onerror = r; }))));
+    try { window.print(); } catch (e) { toast("Use o menu do navegador para imprimir ou salvar em PDF"); }
+    setTimeout(() => (document.title = t), 1500);
+  };
+  filtros(); await gerar();
 }
 
 // ---------------------------------------------------------- lista de unidades (+ agenda)

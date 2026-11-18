@@ -102,6 +102,7 @@ h2{font-size:18px;margin:26px 0 12px;letter-spacing:-.01em}
 .opt.on{background:var(--orange);border-color:var(--orange);color:#fff}
 .opt.on svg.i{color:#fff}
 .opts.rooms .opt{min-height:52px}
+.opts.two{grid-template-columns:1fr 1fr;margin-bottom:12px}
 
 /* ---------- formulários ---------- */
 label.f{display:block;font-size:12.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;margin:20px 0 9px;color:var(--muted)}
@@ -249,10 +250,41 @@ details summary{cursor:pointer}
 .termo .pb{border-top:1px dashed #bbb;margin-top:22px}
 .termo .ass{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:56px}
 .termo .ass div{border-top:1px solid #111;padding-top:6px;text-align:center;font-size:12.5px}
+.rel{background:#fff;color:#16181b;max-width:900px;margin:0 auto 20px;padding:26px 30px;border-radius:12px;font-size:13px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.rel .th{display:flex;align-items:center;gap:16px;border-bottom:3px solid #f07d1a;padding-bottom:12px;margin-bottom:14px}
+.rel .th img{height:42px}
+.rel h1{font-size:18px;margin:0;color:#16181b;letter-spacing:-.01em}
+.rel .sub{color:#555;font-size:13px;margin-top:2px}
+.rel h2{font-size:14px;margin:20px 0 8px;color:#16181b;border-left:4px solid #f07d1a;padding-left:8px}
+.rel .small,.rel .sm{font-size:11.5px;color:#555}
+.rel .kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin:6px 0 10px}
+.rel .kpi{border:1px solid #e3e0da;border-radius:10px;padding:10px 8px;text-align:center;background:#faf8f5}
+.rel .kpi b{display:block;font-size:22px;color:#f07d1a;line-height:1.1}
+.rel .kpi span{display:block;font-size:10.5px;color:#555;margin-top:3px}
+.rel table{width:100%;border-collapse:collapse;margin:4px 0}
+.rel th,.rel td{border-bottom:1px solid #e3e0da;padding:6px 6px;text-align:left;vertical-align:top}
+.rel th{background:#f3f0ea;font-size:11px;text-transform:uppercase;letter-spacing:.03em;color:#444}
+.rel .c{text-align:center}
+.rel td.alerta{color:#c0392b;font-weight:600}
+.rel table.barras td{border:0;padding:3px 6px}
+.rel table.barras .k{width:38%}
+.rel table.barras .b span{display:block;height:12px;border-radius:6px;background:#f07d1a}
+.rel table.barras .n{width:38px;text-align:right;font-weight:700}
+.rel table.barras .p{width:42px;text-align:right;color:#777}
+.rel .duas{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.rel .vazio{color:#777;font-style:italic;margin:4px 0}
+.rel .fotos img{width:90px;height:68px;object-fit:cover;margin:4px 4px 0 0;border:1px solid #ccc;border-radius:4px}
+.rel .rodape-rel{margin-top:22px;border-top:1px solid #e3e0da;padding-top:8px;font-size:10.5px;color:#888;text-align:center}
+@media screen and (max-width:640px){.rel{padding:16px 14px}.rel .th{flex-wrap:wrap}.rel .th img{height:30px}.rel h1{font-size:16px}.rel .kpis{grid-template-columns:repeat(3,1fr)}.rel .duas{grid-template-columns:1fr}.rel table{font-size:11.5px}.rel table:not(.barras){display:block;overflow-x:auto}}
 @media print{
   @page{size:A4;margin:12mm}
   body{background:#fff}
-  .top,.demo-bar,.bottom,.nav,.noprint,.toast{display:none!important}
+  .top,.demo-bar,.rede,.bottom,.nav,.noprint,.toast{display:none!important}
+  .rel{padding:0;max-width:none;border-radius:0}
+  .rel .kpis{grid-template-columns:repeat(6,1fr)}
+  .rel .duas{grid-template-columns:1fr 1fr}
+  .rel tr,.rel .kpi{page-break-inside:avoid}
+  .rel h2{page-break-after:avoid}
   main{padding:0;max-width:none}
   .termo{border:0;padding:0;max-width:none}
   .termo tr{page-break-inside:avoid}
