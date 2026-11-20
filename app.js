@@ -174,7 +174,7 @@ function DemoStore() {
         { id: "demo-adm", nome: "Eduardo", papel: "admin" },
         { id: "demo-eng1", nome: "Renata", papel: "engenheiro" },
         { id: "demo-eng2", nome: "Maria Eduarda", papel: "engenheiro" },
-        ...["Ricardo", "Henrique", "Wesley", "Junior", "João Victor", "Gabriel", "Mario André", "Ana"].map((n, i) => ({ id: "demo-v" + i, nome: n, papel: "vistoriador" })),
+        ...["Ricardo", "Henrique", "Wesley", "Junior", "João Victor", "Gabriel", "Mario André", "Ana", "Lucas"].map((n, i) => ({ id: "demo-v" + i, nome: n, papel: "vistoriador" })),
       ],
     };
     db.agendamentos = (window.AGENDA_DEMO || []).map((a) => {
@@ -199,6 +199,13 @@ function DemoStore() {
     async unidades(empId) { return db.unidades.filter((u) => u.empreendimento_id === empId); },
     async unidade(id) { return db.unidades.find((u) => u.id === id) || null; },
     async agenda(empId) { return (db.agendamentos || []).filter((a) => a.empreendimento_id === empId).sort((a, b) => (a.data + a.hora).localeCompare(b.data + b.hora)); },
+    async salvarAgenda(a) {
+      const row = { ...a, id: a.id || uid() };
+      const i = db.agendamentos.findIndex((x) => x.id === row.id);
+      if (i >= 0) db.agendamentos[i] = { ...db.agendamentos[i], ...row }; else db.agendamentos.push(row);
+      save(); return row;
+    },
+    async apagarAgenda(id) { db.agendamentos = db.agendamentos.filter((a) => a.id !== id); save(); },
     async salvarUnidades(empId, rows) {
       let n = 0;
       for (const r of rows) {
@@ -314,6 +321,12 @@ async function SupaStore() {
     async unidades(empId) { return ok(await sb.from("unidades").select("*").eq("empreendimento_id", empId)); },
     async unidade(id) { return ok(await sb.from("unidades").select("*").eq("id", id).maybeSingle()); },
     async agenda(empId) { return ok(await sb.from("agendamentos").select("*").eq("empreendimento_id", empId).order("data").order("hora")).map((a) => ({ ...a, hora: String(a.hora).slice(0, 5) })); },
+    async salvarAgenda(a) {
+      const { id, ...dados } = a;
+      const row = id ? ok(await sb.from("agendamentos").update(dados).eq("id", id).select().single()) : ok(await sb.from("agendamentos").insert(dados).select().single());
+      return { ...row, hora: String(row.hora).slice(0, 5) };
+    },
+    async apagarAgenda(id) { ok(await sb.from("agendamentos").delete().eq("id", id)); },
     async salvarUnidades(empId, rows) {
       const data = rows.map((r) => ({ empreendimento_id: empId, bloco: r.bloco || "", numero: r.numero, proprietario: r.proprietario || "", telefone: r.telefone || "" }));
       ok(await sb.from("unidades").upsert(data, { onConflict: "empreendimento_id,bloco,numero" }));
@@ -592,6 +605,8 @@ async function ComOffline(R) {
     apagarUnidade: precisaRede((id) => R.apagarUnidade(id)),
     salvarEmp: precisaRede((id, p) => R.salvarEmp(id, p)),
     salvarBase: precisaRede((i) => R.salvarBase(i)),
+    salvarAgenda: precisaRede(async (a) => { const row = await R.salvarAgenda(a); upsertM("agendamentos", row); return row; }),
+    apagarAgenda: precisaRede(async (id) => { await R.apagarAgenda(id); removerM("agendamentos", id); }),
     assinar: (empId, fn) => R.assinar(empId, fn),
     // estado da fila
     estado, sincronizar,
@@ -701,6 +716,7 @@ async function rotear() {
     if (rota === "base") return telaBase();
     if (rota === "termo" && arg && CFG.TERMO_IMPRESSO) return telaTermo(arg);
     if (rota === "relatorio") return telaRelatorio();
+    if (rota === "agenda") return telaAgenda();
     if (rota === "cadastro") return telaCadastro();
     return telaInicio();
   } catch (e) {
@@ -809,6 +825,7 @@ async function telaInicio() {
     <div class="grid g2">
       ${item("#/unidades", "vistoria", "Fazer vistoria", "Agenda do dia, unidades e ocorrências com o cliente")}
       ${item("#/painel", "painel", "Painel do engenheiro", "Mapa dos blocos e ocorrências em tempo real")}
+      ${EU.papel !== "vistoriador" ? item("#/agenda", "agenda", "Agenda de entrega", "Adicionar, mudar ou remover horários") : ""}
       ${EU.papel !== "vistoriador" ? item("#/relatorio", "relatorio", "Relatórios", "Resumo do dia e relatório geral em PDF") : ""}
       ${item("#/base", "base", "Base de soluções", "Problemas comuns e como resolver")}
       ${item("#/cadastro", "predio", "Unidades e proprietários", "Cadastro e importação da planilha")}
@@ -961,6 +978,91 @@ async function telaRelatorio() {
     setTimeout(() => (document.title = t), 1500);
   };
   filtros(); await gerar();
+}
+
+// ---------------------------------------------------------- agenda (adicionar, mudar e remover horários)
+async function telaAgenda() {
+  const meu = SEQ;
+  topo({ titulo: "Agenda de entrega", sub: EMP.nome, voltar: "#/" });
+  rodape(`<button class="btn primary block" id="btnNovoH">${ic("agenda")} Novo horário</button>`);
+  let us = [], ag = [], dia = sessionStorage.getItem("ag-dia") || "";
+  const perfis = Object.values(PERFIS).filter((p) => p.nome).sort((a, b) => a.nome.localeCompare(b.nome));
+  const carregar = async () => { [us, ag] = await Promise.all([S.unidades(EMP.id), S.agenda(EMP.id)]); desenhar(); };
+  const uMap = () => Object.fromEntries(us.map((u) => [u.id, u]));
+  function desenhar() {
+    const um = uMap();
+    const dias = [...new Set(ag.map((a) => a.data))].sort();
+    if (!dia || !dias.includes(dia)) dia = dias.includes(hojeISO()) ? hojeISO() : dias.find((d) => d >= hojeISO()) || dias[0] || hojeISO();
+    sessionStorage.setItem("ag-dia", dia);
+    const doDia = ag.filter((a) => a.data === dia);
+    app(`<div class="chips" id="agDias">${dias.map((d) => `<span class="chip ${d === dia ? "on" : ""}" data-d="${d}">${esc(diaSemana(d))} <b>${ag.filter((a) => a.data === d).length}</b></span>`).join("") || `<span class="muted small">Nenhum horário cadastrado.</span>`}</div>
+      <p class="muted small" style="margin:10px 2px">${doDia.length} horário(s) neste dia. Toque num horário para mudar ou remover.</p>
+      <div class="list">${doDia.map((a) => { const u = um[a.unidade_id];
+        return `<button class="card row ag-item" data-id="${a.id}" style="width:100%;text-align:left;align-items:flex-start;gap:12px">
+          <b style="font-size:17px;min-width:52px;color:var(--orange-2)">${esc(a.hora)}</b>
+          <span style="flex:1"><b>${u ? esc(unidadeNome(u)) : "Unidade removida"}</b><br>
+          <span class="muted small">${esc(a.cliente || u?.proprietario || "")}</span><br>
+          <span class="small">${a.responsavel ? esc(a.responsavel) : `<span style="color:var(--yellow)">Sem responsável</span>`}${a.equipe ? " · " + esc(a.equipe) : ""}${a.observacao ? `<br><i class="muted">${esc(a.observacao)}</i>` : ""}</span></span>
+          ${u && u.status !== "pendente" ? `<span class="tag ${esc(u.status)}">${esc(ST_UNI[u.status] || u.status)}</span>` : ""}
+        </button>`; }).join("")}</div>`);
+    $("#agDias").querySelectorAll("[data-d]").forEach((c) => (c.onclick = () => { dia = c.dataset.d; desenhar(); }));
+    document.querySelectorAll(".ag-item").forEach((b) => (b.onclick = () => editar(ag.find((a) => a.id === b.dataset.id))));
+  }
+  function editar(a) {
+    const novo = !a;
+    a = a || { data: dia || hojeISO(), hora: "08:00", unidade_id: "", cliente: "", responsavel: "", equipe: "", observacao: "" };
+    const um = uMap(); const uAtual = um[a.unidade_id];
+    const blocos = [...new Set(us.map((u) => u.bloco))].sort();
+    const equipes = [...new Set(ag.map((x) => x.equipe).filter(Boolean))].sort();
+    const respConhecido = !a.responsavel || perfis.some((p) => p.nome === a.responsavel) || a.responsavel.includes("/");
+    sheet(`<h3>${novo ? "Novo horário" : "Mudar horário"}</h3>`, `
+      <div class="row"><div style="flex:1"><label class="f" for="hData">Dia</label><input class="inp" type="date" id="hData" value="${esc(a.data)}"></div>
+      <div style="flex:1"><label class="f" for="hHora">Hora</label><input class="inp" type="time" id="hHora" step="900" value="${esc(a.hora)}"></div></div>
+      <div class="row"><div style="flex:1"><label class="f" for="hBloco">Bloco</label><select class="inp" id="hBloco">${blocos.map((b) => `<option ${uAtual?.bloco === b ? "selected" : ""}>${esc(b)}</option>`).join("")}</select></div>
+      <div style="flex:1"><label class="f" for="hApto">Apto</label><select class="inp" id="hApto"></select></div></div>
+      <label class="f" for="hCli">Cliente</label><input class="inp" id="hCli" value="${esc(a.cliente || uAtual?.proprietario || "")}" placeholder="Quem vem receber">
+      <label class="f" for="hResp">Responsável pela vistoria</label>
+      <select class="inp" id="hResp"><option value="">Sem responsável</option>${perfis.map((p) => `<option ${a.responsavel === p.nome ? "selected" : ""}>${esc(p.nome)}</option>`).join("")}
+        ${!respConhecido || a.responsavel.includes("/") ? `<option selected>${esc(a.responsavel)}</option>` : ""}<option value="__outro">Outro nome…</option></select>
+      <input class="inp hidden" id="hRespOutro" placeholder="Nome do responsável (ex.: Junior/João Victor)" style="margin-top:8px">
+      <label class="f" for="hEq">Equipe</label><input class="inp" id="hEq" list="hEqs" value="${esc(a.equipe || "")}" placeholder="Ex.: Equipe 01 Carol"><datalist id="hEqs">${equipes.map((e) => `<option value="${esc(e)}">`).join("")}</datalist>
+      <label class="f" for="hObs">Observação</label><input class="inp" id="hObs" value="${esc(a.observacao || "")}" placeholder="Ex.: o pai vem pegar a chave">
+      <p class="muted small" id="hAviso"></p>`,
+      `<button class="btn" data-close>Cancelar</button>${novo ? "" : `<button class="btn danger" id="hDel">Remover</button>`}<button class="btn primary" id="hSalvar">Salvar</button>`,
+      (el, fechar) => {
+        const selB = $("#hBloco", el), selA = $("#hApto", el), cli = $("#hCli", el), resp = $("#hResp", el);
+        const encher = () => {
+          const lista = us.filter((u) => u.bloco === selB.value).sort(sortUnidades);
+          selA.innerHTML = lista.map((u) => `<option value="${u.id}" ${u.id === a.unidade_id ? "selected" : ""}>${esc(u.numero)}${u.status !== "pendente" ? " · " + esc(ST_UNI[u.status] || u.status) : ""}</option>`).join("");
+          avisar();
+        };
+        const avisar = () => {
+          const u = um[selA.value]; const outros = ag.filter((x) => x.unidade_id === selA.value && x.id !== a.id);
+          $("#hAviso", el).innerHTML = [u ? `Proprietário: <b>${esc(u.proprietario || "—")}</b>` : "", outros.length ? `<span style="color:var(--yellow)">Esta unidade já está na agenda: ${outros.map((x) => `${esc(diaSemana(x.data))} ${esc(x.hora)}`).join(", ")}</span>` : ""].filter(Boolean).join("<br>");
+        };
+        selB.onchange = () => { encher(); const u = um[selA.value]; if (u && novo) cli.value = u.proprietario || ""; };
+        selA.onchange = () => { avisar(); const u = um[selA.value]; if (u && (novo || !cli.value)) cli.value = u.proprietario || ""; };
+        const outro = $("#hRespOutro", el);
+        resp.onchange = () => { outro.classList.toggle("hidden", resp.value !== "__outro"); if (resp.value === "__outro") outro.focus(); };
+        encher();
+        if (novo && !uAtual) { const u = um[selA.value]; if (u) cli.value = u.proprietario || ""; }
+        $("#hSalvar", el).onclick = async () => {
+          const dados = { id: a.id, empreendimento_id: EMP.id, data: $("#hData", el).value, hora: $("#hHora", el).value, unidade_id: selA.value, cliente: cli.value.trim(), responsavel: resp.value === "__outro" ? outro.value.trim() : resp.value, equipe: $("#hEq", el).value.trim(), observacao: $("#hObs", el).value.trim() };
+          if (!dados.data || !dados.hora || !dados.unidade_id) return toast("Preencha dia, hora e unidade");
+          try { await S.salvarAgenda(dados); dia = dados.data; fechar(); toast(novo ? "Horário adicionado" : "Horário atualizado"); await carregar(); }
+          catch (e) { toast("Não foi possível salvar: " + e.message, 5000); }
+        };
+        const del = $("#hDel", el);
+        if (del) del.onclick = async () => {
+          if (!(await confirmar(`Remover o horário das ${a.hora} de ${diaSemana(a.data)}?`, "Remover"))) return;
+          try { await S.apagarAgenda(a.id); fechar(); toast("Horário removido"); await carregar(); }
+          catch (e) { toast("Não foi possível remover: " + e.message, 5000); }
+        };
+      });
+  }
+  $("#btnNovoH").onclick = () => editar(null);
+  vincular(meu, S.assinar(EMP.id, () => carregar()));
+  await carregar();
 }
 
 // ---------------------------------------------------------- lista de unidades (+ agenda)
