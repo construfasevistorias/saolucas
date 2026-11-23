@@ -363,7 +363,11 @@ async function SupaStore() {
     },
     // Executa uma alteração da fila do modo sem internet (pode repetir sem duplicar)
     async executar(op) {
-      for (const f of op.fotos || []) ok(await sb.storage.from("fotos").upload(f.path, f.blob, { contentType: "image/jpeg", upsert: true }));
+      for (const f of op.fotos || []) {
+        // sem "upsert" (o banco só permite enviar, não substituir); se a foto já subiu antes, segue
+        const r = await sb.storage.from("fotos").upload(f.path, f.blob, { contentType: "image/jpeg" });
+        if (r.error && !/already exists|duplicate|409/i.test(String(r.error.message) + " " + (r.error.statusCode || ""))) throw new Error(r.error.message);
+      }
       if (op.tipo === "vist_ins") {
         ok(await sb.from("vistorias").upsert(op.dados, { onConflict: "id" }));
         ok(await sb.from("unidades").update({ status: "em_vistoria" }).eq("id", op.dados.unidade_id));
@@ -446,6 +450,7 @@ async function ComOffline(R) {
   const M = {};
   for (const t of TABS) M[t] = (await idbReq(db, "espelho", "readonly", (s) => s.get(t))) || [];
   let fila = (await idbReq(db, "fila", "readonly", (s) => s.getAll())) || [];
+  fila.forEach((op) => { op.erros = 0; }); // ao abrir o sistema, tenta de novo o que tinha dado erro
   let enviando = false, semServidor = false;
   const ouvintes = new Set();
   const estado = () => ({ online: navigator.onLine && !semServidor, pendentes: fila.length, enviando, erro: fila[0] && fila[0].erros >= 3 ? fila[0].ultimoErro || "erro" : "" });
