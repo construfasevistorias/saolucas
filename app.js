@@ -206,6 +206,12 @@ function DemoStore() {
       save(); return row;
     },
     async apagarAgenda(id) { db.agendamentos = db.agendamentos.filter((a) => a.id !== id); save(); },
+    async apagarVistoria(vid, unidadeId) {
+      db.ocorrencias = db.ocorrencias.filter((o) => o.vistoria_id !== vid);
+      db.vistorias = db.vistorias.filter((v) => v.id !== vid);
+      const u = db.unidades.find((x) => x.id === unidadeId); if (u) u.status = "pendente";
+      save();
+    },
     async salvarUnidades(empId, rows) {
       let n = 0;
       for (const r of rows) {
@@ -374,6 +380,11 @@ async function SupaStore() {
         ok(await sb.from("unidades").update({ status: "em_vistoria" }).eq("id", op.dados.unidade_id));
       } else if (op.tipo === "vist_upd") ok(await sb.from("vistorias").update(op.patch).eq("id", op.id));
       else if (op.tipo === "uni_status") ok(await sb.from("unidades").update({ status: op.status }).eq("id", op.id));
+      else if (op.tipo === "vist_del") {
+        ok(await sb.from("ocorrencias").delete().eq("vistoria_id", op.id));
+        ok(await sb.from("vistorias").delete().eq("id", op.id));
+        ok(await sb.from("unidades").update({ status: "pendente" }).eq("id", op.unidade_id));
+      }
       else if (op.tipo === "occ_ins") ok(await sb.from("ocorrencias").upsert(op.dados, { onConflict: "id" }));
       else if (op.tipo === "occ_upd") ok(await sb.from("ocorrencias").update(op.patch).eq("id", op.id));
       else if (op.tipo === "occ_del") {
@@ -381,6 +392,7 @@ async function SupaStore() {
         ok(await sb.from("ocorrencias").delete().eq("id", op.id));
       } else throw new Error("Tipo desconhecido: " + op.tipo);
     },
+    async apagarVistoria(id, unidade_id) { return this.executar({ tipo: "vist_del", id, unidade_id }); },
     get euId() { return eu?.id; },
     async fotoUrls(paths) {
       const falta = paths.filter((p) => !urlCache[p]);
@@ -468,6 +480,7 @@ async function ComOffline(R) {
     if (op.tipo === "vist_ins") { upsertM("vistorias", op.dados); patchM("unidades", op.dados.unidade_id, { status: "em_vistoria" }); }
     else if (op.tipo === "vist_upd") patchM("vistorias", op.id, op.patch);
     else if (op.tipo === "uni_status") patchM("unidades", op.id, { status: op.status });
+    else if (op.tipo === "vist_del") { M.ocorrencias = M.ocorrencias.filter((o) => o.vistoria_id !== op.id); salvarTab("ocorrencias"); removerM("vistorias", op.id); patchM("unidades", op.unidade_id, { status: "pendente" }); }
     else if (op.tipo === "occ_ins") upsertM("ocorrencias", op.dados);
     else if (op.tipo === "occ_upd") patchM("ocorrencias", op.id, op.patch);
     else if (op.tipo === "occ_del") removerM("ocorrencias", op.id);
@@ -594,6 +607,7 @@ async function ComOffline(R) {
     },
     async atualizarVistoria(id, patch) { await enfileirar({ tipo: "vist_upd", id, patch }); return { ...(porId("vistorias", id) || { id }) }; },
     async statusUnidade(id, status) { await enfileirar({ tipo: "uni_status", id, status }); },
+    async apagarVistoria(id, unidade_id) { await enfileirar({ tipo: "vist_del", id, unidade_id }); },
     async novaOcorrencia(o, blobs) {
       const fotos = await prepararFotos(o.empreendimento_id, o.unidade_id, blobs);
       const agora = new Date().toISOString();
@@ -1227,6 +1241,7 @@ async function telaVistoria(unidadeId) {
       ${os.length ? `<div class="chips" id="fc">${comodos.map((c) => `<span class="chip ${filtroComodo === c ? "on" : ""}" data-c="${esc(c)}">${esc(c)}${c !== "Todos" ? `<span class="n">${porComodo[c]}</span>` : ""}</span>`).join("")}</div><div style="height:12px"></div>` : ""}
       <div class="list" id="occs">${lista.length ? await cardsOcorrencias(lista) : `<div class="empty">Nenhuma ocorrência anotada${concluida ? "" : " ainda. Toque em <b>Anotar ocorrência</b> quando o cliente apontar algo."}</div>`}</div>
       ${concluida ? `<div class="card" style="margin-top:16px;background:var(--green-soft);border-color:rgba(60,207,130,.4)"><b>Vistoria concluída</b> às ${fmtHora(v.concluida_em)}.${v.chaves === "retidas" ? `<div class="small row" style="margin-top:8px">${ic("cadeado","sm")} Chaves com a Construfase para reparos · prazo <b>${fmtData(v.prazo_reparo)}</b></div>` : v.chaves === "entregues" ? `<div class="small row" style="margin-top:8px">${ic("chave","sm")} Chaves entregues ao cliente</div>` : ""}<div class="row" style="margin-top:10px">${CFG.TERMO_IMPRESSO ? `<a class="btn sm" href="#/termo/${u.id}">${ic("impressora")} Imprimir termo</a>` : ""}<button class="btn sm" id="btnReabrir">Reabrir vistoria</button></div></div>` : ""}
+      ${EU.papel !== "vistoriador" ? `<button class="btn danger block" id="btnCancVist" style="margin-top:18px">${ic("lixo")} Apagar esta vistoria</button><p class="muted small" style="margin:6px 2px 0">Para vistoria iniciada por engano: apaga a vistoria e as ocorrências dela e a unidade volta para pendente.</p>` : ""}
     `);
     ligarPlanta();
     const fc = $("#fc"); if (fc) fc.querySelectorAll("[data-c]").forEach((c) => (c.onclick = () => { filtroComodo = c.dataset.c; desenhar(); }));
@@ -1234,6 +1249,12 @@ async function telaVistoria(unidadeId) {
       na_hora: async (id) => { await S.atualizarOcorrencia(id, { status: "resolvida_na_hora" }); toast("Marcada como resolvida na hora"); carregar(); },
       editar: (id) => formOcorrencia(u, v, os.find((o) => o.id === id), carregar),
     });
+    const cv = $("#btnCancVist");
+    if (cv) cv.onclick = async () => {
+      if (!(await confirmar(`Apagar a vistoria de ${unidadeNome(u)}${os.length ? ` e ${os.length} ocorrência(s)` : ""}? A unidade volta para pendente. Não dá para desfazer.`, "Apagar"))) return;
+      try { await S.apagarVistoria(v.id, u.id); toast("Vistoria apagada"); go("#/unidades"); }
+      catch (e) { toast("Não foi possível apagar: " + e.message, 5000); }
+    };
     const r = $("#btnReabrir"); if (r) r.onclick = async () => { await S.atualizarVistoria(v.id, { status: "em_andamento", concluida_em: null }); await S.statusUnidade(u.id, "em_vistoria"); carregar(); };
     rodape(concluida ? "" : `<button class="btn" id="btnFim">Concluir</button><button class="btn primary" id="btnNova" style="flex:2">${ic("plus")} Anotar ocorrência</button>`);
     if (!concluida) {
@@ -1699,7 +1720,7 @@ function barraRede(st) {
 function detalhesRede() {
   if (!S || !S.estado) return;
   const st = S.estado(), erros = S.errosFila();
-  const nomes = { vist_ins: "início de vistoria", vist_upd: "atualização de vistoria", uni_status: "situação da unidade", occ_ins: "nova ocorrência", occ_upd: "alteração de ocorrência", occ_del: "exclusão de ocorrência" };
+  const nomes = { vist_ins: "início de vistoria", vist_upd: "atualização de vistoria", uni_status: "situação da unidade", occ_ins: "nova ocorrência", occ_upd: "alteração de ocorrência", occ_del: "exclusão de ocorrência", vist_del: "exclusão de vistoria" };
   sheet(`<h3>Envio para o servidor</h3>`, `
     <div class="card"><b>${st.online ? "Com internet" : "Sem internet"}</b><div class="muted small">${st.pendentes ? `${st.pendentes} alteração(ões) aguardando envio. Elas ficam guardadas no celular e sobem sozinhas quando o sinal voltar.` : "Nada aguardando envio."}</div></div>
     ${erros.length ? `<div class="card" style="border-color:rgba(255,93,82,.4)"><b style="color:var(--red)">O servidor recusou: ${esc(nomes[erros[0].tipo] || erros[0].tipo)}</b><div class="muted small">${esc(erros[0].erro || "")}</div><p class="small">Tente de novo. Se continuar, mostre esta mensagem ao Eduardo antes de descartar.</p></div>` : ""}
