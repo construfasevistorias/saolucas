@@ -20,7 +20,9 @@ function corriqueiroLocal(area, texto) {
   return false;
 }
 // A agenda usa primeiros nomes ("Ricardo", "Junior/João Victor"): confere com o nome do perfil
-const ehMeu = (a) => !!(a.responsavel && EU && norm(a.responsavel).split("/").some((p) => { const w = p.trim().split(/\s+/)[0]; return w && norm(EU.nome).split(/[^a-z0-9]+/).includes(w); }));
+// Quem fez a vistoria = quem iniciou com o próprio login (a agenda não define mais o responsável)
+const ultimaVistoria = (vs, unidadeId) => vs.filter((v) => v.unidade_id === unidadeId).sort((a, b) => String(b.iniciada_em).localeCompare(String(a.iniciada_em)))[0];
+const nomeVistoriador = (v) => (v && PERFIS[v.vistoriador_id]?.nome) || (v ? "—" : "");
 const comodosDe = (u) => [...((u && u.comodos && u.comodos.length) ? u.comodos : COMODOS.filter((c) => c !== "Unidade toda")), "Unidade toda"];
 const hojeISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 const diaSemana = (iso) => { const [y, m, d] = iso.split("-").map(Number); return new Date(y, m - 1, d).toLocaleDateString("pt-BR", { weekday: "short", day: "2-digit", month: "2-digit" }); };
@@ -851,12 +853,11 @@ async function telaInicio() {
   const conc = us.filter((u) => u.status === "concluida").length;
   const emV = us.filter((u) => u.status === "em_vistoria").length;
   const hoje = ag.filter((a) => a.data === hojeISO());
-  const meus = hoje.filter((a) => ehMeu(a));
   const proxDia = ag.find((a) => a.data > hojeISO());
   const abertas = os.filter((o) => o.status === "aberta" || o.status === "equipe_acionada").length;
   const pct = us.length ? Math.round((conc / us.length) * 100) : 0;
   const agora = new Date().toTimeString().slice(0, 5);
-  const prox = (meus.length ? meus : hoje).find((a) => a.hora >= agora);
+  const prox = hoje.find((a) => a.hora >= agora);
   const uMap = {}; us.forEach((u) => (uMap[u.id] = u));
   const item = (href, n, t, d) => `<a class="card home-card" href="${href}"><span class="ic">${ic(n)}</span><span><b>${t}</b><small>${d}</small></span><span class="go">${ic("chevron")}</span></a>`;
   app(`
@@ -875,7 +876,7 @@ async function telaInicio() {
     </div>
     ${hoje.length ? `<a class="card home-card" href="#/unidades" style="border-color:rgba(240,125,26,.55);margin-bottom:12px">
         <span class="ic">${ic("agenda")}</span>
-        <span><b>Hoje: ${hoje.length} vistoria(s) agendada(s)</b><small>${meus.length ? `${meus.length} com você` : "Toque para ver a agenda"}${prox ? ` · próxima às ${esc(prox.hora)} · ${esc(uMap[prox.unidade_id] ? unidadeNome(uMap[prox.unidade_id]) : "")}` : ""}</small></span>
+        <span><b>Hoje: ${hoje.length} vistoria(s) agendada(s)</b><small>${"Toque para ver a agenda"}${prox ? ` · próxima às ${esc(prox.hora)} · ${esc(uMap[prox.unidade_id] ? unidadeNome(uMap[prox.unidade_id]) : "")}` : ""}</small></span>
         <span class="go">${ic("chevron")}</span></a>`
       : proxDia ? `<a class="card home-card" href="#/unidades" style="margin-bottom:12px"><span class="ic">${ic("agenda")}</span><span><b>Próximas vistorias</b><small>${esc(diaSemana(proxDia.data))} · ${ag.filter((a) => a.data === proxDia.data).length} horário(s)</small></span><span class="go">${ic("chevron")}</span></a>` : ""}
     <div class="grid g2">
@@ -991,9 +992,9 @@ async function telaRelatorio() {
       html = `${cab(`Resumo das vistorias · ${esc(EMP.nome)}`, `${esc(diaSemana(f.data).replace(/^./, (c) => c.toUpperCase()))} · ${PERIODOS[f.periodo]}`)}
         <div class="kpis">${kpi(tocadas.size, "unidades vistoriadas")}${kpi(vFim.length, "vistorias concluídas")}${kpi(occ.length, "ocorrências anotadas")}${kpi(naHora, "resolvidas na hora")}${kpi(pend.length, "pendentes")}${kpi(vFim.filter((v) => v.chaves === "retidas").length, "chaves retidas")}</div>
         <p class="sm">Andamento da entrega: <b>${concluidasTotal} de ${us.length}</b> unidades concluídas (${pct(concluidasTotal, us.length)}%).</p>
-        ${f.data && agDia.length ? `<h2>Agenda do período</h2><table><tr><th>Hora</th><th>Unidade</th><th>Cliente</th><th>Responsável</th><th>Situação</th></tr>
+        ${f.data && agDia.length ? `<h2>Agenda do período</h2><table><tr><th>Hora</th><th>Unidade</th><th>Cliente</th><th>Vistoria feita por</th><th>Situação</th></tr>
           ${agDia.map((a) => { const u = uMap[a.unidade_id]; const v = u && ultimaVist(u.id); const sit = !u ? "" : u.status === "concluida" ? "Concluída" : v ? "Em vistoria" : "Não iniciada";
-            return `<tr><td>${esc(a.hora)}</td><td>${u ? esc(unidadeNome(u)) : ""}</td><td>${esc(a.cliente || u?.proprietario || "")}</td><td>${esc(a.responsavel || "")}</td><td class="${sit === "Não iniciada" ? "alerta" : ""}">${sit}</td></tr>`; }).join("")}</table>` : ""}
+            return `<tr><td>${esc(a.hora)}</td><td>${u ? esc(unidadeNome(u)) : ""}</td><td>${esc(a.cliente || u?.proprietario || "")}</td><td>${esc(v ? nomeVistoriador(v) : "")}</td><td class="${sit === "Não iniciada" ? "alerta" : ""}">${sit}</td></tr>`; }).join("")}</table>` : ""}
         <h2>Unidades vistoriadas</h2>
         ${linhasUni ? `<table><tr><th>Unidade</th><th>Vistoriador</th><th>Horário</th><th class="c">Ocorr.</th><th class="c">Na hora</th><th class="c">Pend.</th><th>Chaves</th></tr>${linhasUni}</table>` : `<p class="vazio">Nenhuma vistoria neste período.</p>`}
         <h2>Ocorrências por área</h2>${barras(contar(occ, "area"), occ.length)}
@@ -1042,9 +1043,8 @@ async function telaAgenda() {
   const meu = SEQ;
   topo({ titulo: "Agenda de entrega", sub: EMP.nome, voltar: "#/" });
   rodape(`<button class="btn primary block" id="btnNovoH">${ic("agenda")} Novo horário</button>`);
-  let us = [], ag = [], dia = sessionStorage.getItem("ag-dia") || "";
-  const perfis = Object.values(PERFIS).filter((p) => p.nome).sort((a, b) => a.nome.localeCompare(b.nome));
-  const carregar = async () => { [us, ag] = await Promise.all([S.unidades(EMP.id), S.agenda(EMP.id)]); desenhar(); };
+  let us = [], ag = [], vs = [], dia = sessionStorage.getItem("ag-dia") || "";
+  const carregar = async () => { [us, ag, vs] = await Promise.all([S.unidades(EMP.id), S.agenda(EMP.id), S.vistoriasEmp(EMP.id)]); desenhar(); };
   const uMap = () => Object.fromEntries(us.map((u) => [u.id, u]));
   function desenhar() {
     const um = uMap();
@@ -1059,7 +1059,7 @@ async function telaAgenda() {
           <b style="font-size:17px;min-width:52px;color:var(--orange-2)">${esc(a.hora)}</b>
           <span style="flex:1"><b>${u ? esc(unidadeNome(u)) : "Unidade removida"}</b><br>
           <span class="muted small">${esc(a.cliente || u?.proprietario || "")}</span><br>
-          <span class="small">${a.responsavel ? esc(a.responsavel) : `<span style="color:var(--yellow)">Sem responsável</span>`}${a.equipe ? " · " + esc(a.equipe) : ""}${a.observacao ? `<br><i class="muted">${esc(a.observacao)}</i>` : ""}</span></span>
+          <span class="small">${u && u.status !== "pendente" ? `Vistoria: <b>${esc(nomeVistoriador(ultimaVistoria(vs, u.id)))}</b>` : `<span class="muted">Aguardando vistoria</span>`}${a.equipe ? " · " + esc(a.equipe) : ""}${a.observacao ? `<br><i class="muted">${esc(a.observacao)}</i>` : ""}</span></span>
           ${u && u.status !== "pendente" ? `<span class="tag ${esc(u.status)}">${esc(ST_UNI[u.status] || u.status)}</span>` : ""}
         </button>`; }).join("")}</div>`);
     $("#agDias").querySelectorAll("[data-d]").forEach((c) => (c.onclick = () => { dia = c.dataset.d; desenhar(); }));
@@ -1071,23 +1071,18 @@ async function telaAgenda() {
     const um = uMap(); const uAtual = um[a.unidade_id];
     const blocos = [...new Set(us.map((u) => u.bloco))].sort();
     const equipes = [...new Set(ag.map((x) => x.equipe).filter(Boolean))].sort();
-    const respConhecido = !a.responsavel || perfis.some((p) => p.nome === a.responsavel) || a.responsavel.includes("/");
     sheet(`<h3>${novo ? "Novo horário" : "Mudar horário"}</h3>`, `
       <div class="row"><div style="flex:1"><label class="f" for="hData">Dia</label><input class="inp" type="date" id="hData" value="${esc(a.data)}"></div>
       <div style="flex:1"><label class="f" for="hHora">Hora</label><input class="inp" type="time" id="hHora" step="900" value="${esc(a.hora)}"></div></div>
       <div class="row"><div style="flex:1"><label class="f" for="hBloco">Bloco</label><select class="inp" id="hBloco">${blocos.map((b) => `<option ${uAtual?.bloco === b ? "selected" : ""}>${esc(b)}</option>`).join("")}</select></div>
       <div style="flex:1"><label class="f" for="hApto">Apto</label><select class="inp" id="hApto"></select></div></div>
       <label class="f" for="hCli">Cliente</label><input class="inp" id="hCli" value="${esc(a.cliente || uAtual?.proprietario || "")}" placeholder="Quem vem receber">
-      <label class="f" for="hResp">Responsável pela vistoria</label>
-      <select class="inp" id="hResp"><option value="">Sem responsável</option>${perfis.map((p) => `<option ${a.responsavel === p.nome ? "selected" : ""}>${esc(p.nome)}</option>`).join("")}
-        ${!respConhecido || a.responsavel.includes("/") ? `<option selected>${esc(a.responsavel)}</option>` : ""}<option value="__outro">Outro nome…</option></select>
-      <input class="inp hidden" id="hRespOutro" placeholder="Nome do responsável (ex.: Junior/João Victor)" style="margin-top:8px">
       <label class="f" for="hEq">Equipe</label><input class="inp" id="hEq" list="hEqs" value="${esc(a.equipe || "")}" placeholder="Ex.: Equipe 01 Carol"><datalist id="hEqs">${equipes.map((e) => `<option value="${esc(e)}">`).join("")}</datalist>
       <label class="f" for="hObs">Observação</label><input class="inp" id="hObs" value="${esc(a.observacao || "")}" placeholder="Ex.: o pai vem pegar a chave">
       <p class="muted small" id="hAviso"></p>`,
       `<button class="btn" data-close>Cancelar</button>${novo ? "" : `<button class="btn danger" id="hDel">Remover</button>`}<button class="btn primary" id="hSalvar">Salvar</button>`,
       (el, fechar) => {
-        const selB = $("#hBloco", el), selA = $("#hApto", el), cli = $("#hCli", el), resp = $("#hResp", el);
+        const selB = $("#hBloco", el), selA = $("#hApto", el), cli = $("#hCli", el);
         const encher = () => {
           const lista = us.filter((u) => u.bloco === selB.value).sort(sortUnidades);
           selA.innerHTML = lista.map((u) => `<option value="${u.id}" ${u.id === a.unidade_id ? "selected" : ""}>${esc(u.numero)}${u.status !== "pendente" ? " · " + esc(ST_UNI[u.status] || u.status) : ""}</option>`).join("");
@@ -1099,12 +1094,10 @@ async function telaAgenda() {
         };
         selB.onchange = () => { encher(); const u = um[selA.value]; if (u && novo) cli.value = u.proprietario || ""; };
         selA.onchange = () => { avisar(); const u = um[selA.value]; if (u && (novo || !cli.value)) cli.value = u.proprietario || ""; };
-        const outro = $("#hRespOutro", el);
-        resp.onchange = () => { outro.classList.toggle("hidden", resp.value !== "__outro"); if (resp.value === "__outro") outro.focus(); };
         encher();
         if (novo && !uAtual) { const u = um[selA.value]; if (u) cli.value = u.proprietario || ""; }
         $("#hSalvar", el).onclick = async () => {
-          const dados = { id: a.id, empreendimento_id: EMP.id, data: $("#hData", el).value, hora: $("#hHora", el).value, unidade_id: selA.value, cliente: cli.value.trim(), responsavel: resp.value === "__outro" ? outro.value.trim() : resp.value, equipe: $("#hEq", el).value.trim(), observacao: $("#hObs", el).value.trim() };
+          const dados = { id: a.id, empreendimento_id: EMP.id, data: $("#hData", el).value, hora: $("#hHora", el).value, unidade_id: selA.value, cliente: cli.value.trim(), responsavel: "", equipe: $("#hEq", el).value.trim(), observacao: $("#hObs", el).value.trim() };
           if (!dados.data || !dados.hora || !dados.unidade_id) return toast("Preencha dia, hora e unidade");
           try { await S.salvarAgenda(dados); dia = dados.data; fechar(); toast(novo ? "Horário adicionado" : "Horário atualizado"); await carregar(); }
           catch (e) { toast("Não foi possível salvar: " + e.message, 5000); }
@@ -1199,9 +1192,9 @@ async function telaUsuarios() {
 async function telaUnidades() {
   topo({ titulo: "Vistoria", sub: EMP.nome });
   navegacao("unidades");
-  let us = [], os = [], ag = [];
+  let us = [], os = [], ag = [], vs = [];
   let filtro = sessionStorage.getItem("f-uni") || "agenda", busca = "", dia = sessionStorage.getItem("f-dia") || "";
-  const carregar = async () => { [us, os, ag] = await Promise.all([S.unidades(EMP.id), S.ocorrenciasEmp(EMP.id), S.agenda(EMP.id)]); desenhar(); };
+  const carregar = async () => { [us, os, ag, vs] = await Promise.all([S.unidades(EMP.id), S.ocorrenciasEmp(EMP.id), S.agenda(EMP.id), S.vistoriasEmp(EMP.id)]); desenhar(); };
   app(`<div class="search">${ic("busca")}<input class="inp" id="busca" placeholder="Buscar por número, bloco ou nome" autocomplete="off"></div>
     <div class="chips" id="fil" style="margin:12px 0 4px"></div><div id="dias" class="chips" style="margin:8px 0 0"></div><div id="lista"></div>`);
   $("#busca").oninput = (e) => { busca = norm(e.target.value); desenhar(); };
@@ -1232,7 +1225,8 @@ async function telaUnidades() {
       for (const a of doDia) {
         const u = uMap[a.unidade_id];
         if (a.hora !== hora) { hora = a.hora; html += `<div class="bloco-ttl"><span class="hora">${ic("relogio", "sm")} ${esc(hora)}</span></div>`; }
-        const extra = `Bloco ${esc(u.bloco)}${a.responsavel ? " · " + (ehMeu(a) ? "<b style='color:var(--orange-dark)'>com você</b>" : esc(a.responsavel)) : ""}${a.cliente && norm(a.cliente) !== norm(u.proprietario) ? " · agendado: " + esc(a.cliente) : ""}`;
+        const vU = u.status !== "pendente" ? ultimaVistoria(vs, u.id) : null;
+        const extra = `Bloco ${esc(u.bloco)}${vU ? " · vistoria: <b>" + esc(nomeVistoriador(vU)) + "</b>" : ""}${a.cliente && norm(a.cliente) !== norm(u.proprietario) ? " · agendado: " + esc(a.cliente) : ""}`;
         html += linhaUnidade(u, extra, nOcc[u.id]);
       }
       $("#lista").innerHTML = `<div class="list">${html}</div>`;
@@ -1294,7 +1288,7 @@ async function telaVistoria(unidadeId) {
   let v = await S.vistoriaAberta(u.id);
   let os = [], filtroComodo = "Todos";
   const ag = (await S.agenda(EMP.id)).filter((a) => a.unidade_id === unidadeId);
-  const agTxt = ag.map((a) => `${diaSemana(a.data)} às ${a.hora}${a.responsavel ? " · " + a.responsavel : ""}${a.cliente && norm(a.cliente) !== norm(u.proprietario) ? " · agendado por " + a.cliente : ""}`).join("<br>");
+  const agTxt = ag.map((a) => `${diaSemana(a.data)} às ${a.hora}${a.cliente && norm(a.cliente) !== norm(u.proprietario) ? " · agendado por " + a.cliente : ""}`).join("<br>");
   const btnPlanta = () => u.planta ? `<button class="btn sm" id="btnPlanta">${ic("planta")} Ver planta</button>` : "";
   const ligarPlanta = () => { const b = $("#btnPlanta"); if (b) b.onclick = () => sheet(`<h3>Planta · ${esc(u.tipologia || "")}</h3>`, `<img src="img/plantas/${esc(u.planta)}.jpg" alt="Planta da unidade" style="width:100%;background:#fff;border-radius:10px;cursor:zoom-in" onclick="this.style.width=this.style.width==='200%'?'100%':'200%'"><p class="muted small">Toque na planta para ampliar.</p>`, `<button class="btn block" data-close>Fechar</button>`); };
 
@@ -1328,7 +1322,8 @@ async function telaVistoria(unidadeId) {
       <div class="card">
         <div class="row"><div style="flex:1"><div class="muted small">Proprietário</div><b style="font-size:17px">${esc(u.proprietario || "—")}</b>
         <div class="muted small">${esc(u.tipologia || "")}</div>
-        <div class="muted small">Acompanhante: ${esc(v.acompanhante || "—")} · início ${fmtHora(v.iniciada_em)}</div></div>
+        <div class="small" style="margin-top:4px">Vistoria feita por <b>${esc(nomeVistoriador(v))}</b> · início ${fmtHora(v.iniciada_em)}</div>
+        <div class="muted small">Acompanhante: ${esc(v.acompanhante || "—")}</div></div>
         <span class="tag ${u.status}">${ST_UNI[u.status]}</span></div>
         <div class="row" style="margin-top:10px">${btnPlanta()}${CFG.TERMO_IMPRESSO ? `<a class="btn sm" href="#/termo/${u.id}">${ic("impressora")} Termo</a>` : ""}</div>
       </div>

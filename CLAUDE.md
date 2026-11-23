@@ -58,7 +58,10 @@ cliente vai ao escritório da obra assinar o termo. O engenheiro não vê nada e
 ## Equipe (perfis)
 - Admin: Eduardo · Engenheiras: Renata, Maria Eduarda
 - Vistoriadores (estagiários que acompanham a vistoria): Ricardo, Henrique, Wesley, Junior, João Victor,
-  Gabriel, Mario André, Ana. A agenda usa esses nomes; `ehMeu()` liga a agenda ao usuário logado.
+  Gabriel, Mario André, Ana, Lucas.
+- **A agenda NÃO define quem faz a vistoria** (decisão do Eduardo, 23/11/2026): quem faz é quem iniciar com o próprio login
+  (`vistorias.vistoriador_id`). As telas mostram "Vistoria feita por …" (`ultimaVistoria`/`nomeVistoriador`); o campo
+  `agendamentos.responsavel` ficou sem uso.
 - Logins curtos, só para o sistema: o usuário digita `ricardo` e o app completa `@vistoria.construfase.com.br`
   (`DOMINIO_LOGIN` no config.js; `emailDoUsuario()` no app.js). `supabase/equipe.sql` cria os 11 logins
   direto em auth.users/auth.identities com senha provisória e `trocar_senha: true` → `telaTrocarSenha` obrigatória
