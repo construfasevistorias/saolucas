@@ -31,6 +31,7 @@ const PAPEIS = { vistoriador: "Vistoriador(a)", engenheiro: "Engenharia", admin:
 const ICONES = {
   back: '<path d="M15 18l-6-6 6-6"/>', plus: '<path d="M12 5v14M5 12h14"/>', check: '<path d="M20 6L9 17l-5-5"/>', x: '<path d="M18 6L6 18M6 6l12 12"/>',
   chevron: '<path d="M9 18l6-6-6-6"/>',
+  usuario: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
   relatorio: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 18v-3M12 18v-6M16 18v-4"/>',
   wifi: '<path d="M2 8.8a15 15 0 0 1 20 0M5 12.6a10 10 0 0 1 14 0M8.5 16.4a5 5 0 0 1 7 0"/><path d="M12 20h.01"/><path d="M3 3l18 18"/>',
   camera: '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3.2"/>',
@@ -206,6 +207,10 @@ function DemoStore() {
       save(); return row;
     },
     async apagarAgenda(id) { db.agendamentos = db.agendamentos.filter((a) => a.id !== id); save(); },
+    async listarUsuarios() { return db.perfis.map((p) => ({ id: p.id, usuario: sugerirUsuario(p.nome), nome: p.nome, papel: p.papel, senha_provisoria: false, ultimo_acesso: null })); },
+    async criarUsuario(usuario, nome, papel) { db.perfis.push({ id: uid(), nome, papel }); save(); },
+    async redefinirSenha() { /* demonstração */ },
+    async alterarUsuario(id, nome, papel) { const p = db.perfis.find((x) => x.id === id); if (p) Object.assign(p, { nome, papel }); save(); },
     async apagarVistoria(vid, unidadeId) {
       db.ocorrencias = db.ocorrencias.filter((o) => o.vistoria_id !== vid);
       db.vistorias = db.vistorias.filter((v) => v.id !== vid);
@@ -333,6 +338,10 @@ async function SupaStore() {
       return { ...row, hora: String(row.hora).slice(0, 5) };
     },
     async apagarAgenda(id) { ok(await sb.from("agendamentos").delete().eq("id", id)); },
+    async listarUsuarios() { return ok(await sb.rpc("listar_usuarios")) || []; },
+    async criarUsuario(usuario, nome, papel, senha) { return ok(await sb.rpc("criar_usuario", { p_usuario: usuario, p_nome: nome, p_papel: papel, p_senha: senha })); },
+    async redefinirSenha(usuario, senha) { ok(await sb.rpc("redefinir_senha", { p_usuario: usuario, p_senha: senha })); },
+    async alterarUsuario(id, nome, papel) { ok(await sb.rpc("alterar_usuario", { p_id: id, p_nome: nome, p_papel: papel })); },
     async salvarUnidades(empId, rows) {
       const data = rows.map((r) => ({ empreendimento_id: empId, bloco: r.bloco || "", numero: r.numero, proprietario: r.proprietario || "", telefone: r.telefone || "" }));
       ok(await sb.from("unidades").upsert(data, { onConflict: "empreendimento_id,bloco,numero" }));
@@ -640,6 +649,10 @@ async function ComOffline(R) {
     apagarUnidade: precisaRede((id) => R.apagarUnidade(id)),
     salvarEmp: precisaRede((id, p) => R.salvarEmp(id, p)),
     salvarBase: precisaRede((i) => R.salvarBase(i)),
+    listarUsuarios: precisaRede(() => R.listarUsuarios()),
+    criarUsuario: precisaRede((...a) => R.criarUsuario(...a)),
+    redefinirSenha: precisaRede((...a) => R.redefinirSenha(...a)),
+    alterarUsuario: precisaRede((...a) => R.alterarUsuario(...a)),
     salvarAgenda: precisaRede(async (a) => { const row = await R.salvarAgenda(a); upsertM("agendamentos", row); return row; }),
     apagarAgenda: precisaRede(async (id) => { await R.apagarAgenda(id); removerM("agendamentos", id); }),
     assinar: (empId, fn) => R.assinar(empId, fn),
@@ -752,6 +765,7 @@ async function rotear() {
     if (rota === "termo" && arg && CFG.TERMO_IMPRESSO) return telaTermo(arg);
     if (rota === "relatorio") return telaRelatorio();
     if (rota === "agenda") return telaAgenda();
+    if (rota === "usuarios") return telaUsuarios();
     if (rota === "cadastro") return telaCadastro();
     return telaInicio();
   } catch (e) {
@@ -860,6 +874,7 @@ async function telaInicio() {
     <div class="grid g2">
       ${item("#/unidades", "vistoria", "Fazer vistoria", "Agenda do dia, unidades e ocorrências com o cliente")}
       ${item("#/painel", "painel", "Painel do engenheiro", "Mapa dos blocos e ocorrências em tempo real")}
+      ${EU.papel === "admin" ? item("#/usuarios", "usuario", "Usuários", "Cadastrar pessoas e redefinir senhas") : ""}
       ${EU.papel !== "vistoriador" ? item("#/agenda", "agenda", "Agenda de entrega", "Adicionar, mudar ou remover horários") : ""}
       ${EU.papel !== "vistoriador" ? item("#/relatorio", "relatorio", "Relatórios", "Resumo do dia e relatório geral em PDF") : ""}
       ${item("#/base", "base", "Base de soluções", "Problemas comuns e como resolver")}
@@ -1097,6 +1112,79 @@ async function telaAgenda() {
   }
   $("#btnNovoH").onclick = () => editar(null);
   vincular(meu, S.assinar(EMP.id, () => carregar()));
+  await carregar();
+}
+
+// ---------------------------------------------------------- usuários (só administrador)
+const sugerirUsuario = (nome) => (String(nome || "").trim().split(/\s+/)[0] || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9._-]/g, "");
+async function telaUsuarios() {
+  topo({ titulo: "Usuários", sub: "Logins do sistema", voltar: "#/" });
+  if (EU.papel !== "admin") { app(`<div class="empty">Só o administrador cadastra usuários.</div>`); rodape(""); return; }
+  rodape(`<button class="btn primary block" id="btnNovoU">${ic("plus")} Novo usuário</button>`);
+  let lista = [];
+  const carregar = async () => {
+    try { lista = await S.listarUsuarios(); }
+    catch (e) {
+      app(`<div class="card"><b>Não foi possível carregar os usuários.</b><p class="muted small">${esc(e.message)}</p>
+        ${/function|listar_usuarios|schema cache/i.test(e.message) ? `<p class="small">Falta rodar uma vez o arquivo <b>supabase/usuarios.sql</b> no SQL Editor do Supabase.</p>` : ""}</div>`);
+      return;
+    }
+    app(`<p class="muted small" style="margin:0 2px 10px">${lista.length} pessoas com login. Para entrar, cada uma digita só o <b>usuário</b> e a senha em <b>${esc(location.host + location.pathname)}</b></p>
+      <div class="list">${lista.map((x) => `<button class="card row us-item" data-id="${x.id}" style="width:100%;text-align:left;align-items:center;gap:12px">
+        <span class="avatar">${esc((x.nome || "?").charAt(0).toUpperCase())}</span>
+        <span style="flex:1"><b>${esc(x.nome)}</b><br><span class="small">usuário: <b>${esc(x.usuario)}</b> · ${esc(PAPEIS[x.papel] || x.papel)}</span><br>
+        <span class="small" style="color:${x.senha_provisoria ? "var(--yellow)" : "var(--muted)"}">${x.senha_provisoria ? "Ainda com a senha provisória" : "Já criou a própria senha"}${x.ultimo_acesso ? ` · último acesso ${fmtDataHora(x.ultimo_acesso)}` : " · nunca entrou"}</span></span>
+        ${ic("chevron", "sm")}</button>`).join("")}</div>`);
+    document.querySelectorAll(".us-item").forEach((b) => (b.onclick = () => editar(lista.find((x) => x.id === b.dataset.id))));
+  };
+  const opcoesPapel = (atual) => Object.entries(PAPEIS).map(([k, t]) => `<option value="${k}" ${atual === k ? "selected" : ""}>${t}</option>`).join("");
+  function novo() {
+    sheet(`<h3>Novo usuário</h3>`, `
+      <label class="f" for="uNome">Nome</label><input class="inp" id="uNome" placeholder="Ex.: Vinicius" autocomplete="off">
+      <label class="f" for="uUser">Usuário (para entrar)</label><input class="inp" id="uUser" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="Ex.: vinicius">
+      <label class="f" for="uPapel">Papel</label><select class="inp" id="uPapel">${opcoesPapel("vistoriador")}</select>
+      <label class="f" for="uSenha">Senha provisória</label><input class="inp" id="uSenha" type="text" autocomplete="off" autocapitalize="none" placeholder="Mínimo 6 caracteres">
+      <p class="muted small">No primeiro acesso, o sistema pede para a pessoa criar a própria senha. Passe a provisória pessoalmente.</p>`,
+      `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="uSalvar">Cadastrar</button>`,
+      (el, fechar) => {
+        let mexeu = false;
+        $("#uUser", el).oninput = () => (mexeu = true);
+        $("#uNome", el).oninput = (e) => { if (!mexeu) $("#uUser", el).value = sugerirUsuario(e.target.value); };
+        $("#uSalvar", el).onclick = async () => {
+          const nome = $("#uNome", el).value.trim(), usuario = sugerirUsuario($("#uUser", el).value) || $("#uUser", el).value.trim().toLowerCase();
+          const papel = $("#uPapel", el).value, senha = $("#uSenha", el).value;
+          if (!nome || !usuario) return toast("Preencha nome e usuário");
+          if (senha.length < 6) return toast("A senha provisória precisa ter pelo menos 6 caracteres");
+          try { await S.criarUsuario(usuario, nome, papel, senha); fechar(); toast(`Usuário ${usuario} cadastrado`); PERFIS = {}; (await S.perfis()).forEach((p) => (PERFIS[p.id] = p)); carregar(); }
+          catch (e) { toast("Não foi possível cadastrar: " + e.message, 6000); }
+        };
+      });
+  }
+  function editar(x) {
+    sheet(`<h3>${esc(x.nome)}</h3>`, `
+      <p class="small">Usuário: <b>${esc(x.usuario)}</b></p>
+      <label class="f" for="eNome">Nome</label><input class="inp" id="eNome" value="${esc(x.nome)}">
+      <label class="f" for="ePapel">Papel</label><select class="inp" id="ePapel">${opcoesPapel(x.papel)}</select>
+      <div style="height:10px"></div><button class="btn block" id="eSalvar">Salvar nome e papel</button>
+      <label class="f" for="eSenha" style="margin-top:18px">Esqueceu a senha? Defina uma provisória</label>
+      <input class="inp" id="eSenha" type="text" autocomplete="off" autocapitalize="none" placeholder="Nova senha provisória (mín. 6)">
+      <div style="height:8px"></div><button class="btn block" id="eRedef">${ic("chave")} Redefinir senha</button>`,
+      `<button class="btn" data-close>Fechar</button>`,
+      (el, fechar) => {
+        $("#eSalvar", el).onclick = async () => {
+          try { await S.alterarUsuario(x.id, $("#eNome", el).value.trim(), $("#ePapel", el).value); fechar(); toast("Salvo"); carregar(); }
+          catch (e) { toast("Não foi possível salvar: " + e.message, 6000); }
+        };
+        $("#eRedef", el).onclick = async () => {
+          const s = $("#eSenha", el).value;
+          if (s.length < 6) return toast("A senha provisória precisa ter pelo menos 6 caracteres");
+          if (!(await confirmar(`Definir a senha provisória de ${x.usuario}? Ela vai criar uma senha nova ao entrar.`, "Redefinir"))) return;
+          try { await S.redefinirSenha(x.usuario, s); toast("Senha provisória definida"); carregar(); }
+          catch (e) { toast("Não foi possível redefinir: " + e.message, 6000); }
+        };
+      });
+  }
+  $("#btnNovoU").onclick = novo;
   await carregar();
 }
 
