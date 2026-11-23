@@ -365,7 +365,8 @@ async function SupaStore() {
     async executar(op) {
       for (const f of op.fotos || []) {
         // sem "upsert" (o banco só permite enviar, não substituir); se a foto já subiu antes, segue
-        const r = await sb.storage.from("fotos").upload(f.path, f.blob, { contentType: "image/jpeg" });
+        const blob = f.blob || new Blob([f.buf], { type: f.type || "image/jpeg" });
+        const r = await sb.storage.from("fotos").upload(f.path, blob, { contentType: "image/jpeg" });
         if (r.error && !/already exists|duplicate|409/i.test(String(r.error.message) + " " + (r.error.statusCode || ""))) throw new Error(r.error.message);
       }
       if (op.tipo === "vist_ins") {
@@ -473,7 +474,7 @@ async function ComOffline(R) {
   }
   // fotos que ainda não subiram aparecem direto do celular
   const fotoLocal = {};
-  const indexarFotos = (op) => (op.fotos || []).forEach((f) => { if (!fotoLocal[f.path]) fotoLocal[f.path] = URL.createObjectURL(f.blob); });
+  const indexarFotos = (op) => (op.fotos || []).forEach((f) => { if (!fotoLocal[f.path]) fotoLocal[f.path] = URL.createObjectURL(f.blob || new Blob([f.buf], { type: f.type || "image/jpeg" })); });
   fila.forEach(indexarFotos);
 
   // ---- leitura: internet (até 6 s) ou cópia local; a fila é reaplicada por cima
@@ -498,8 +499,20 @@ async function ComOffline(R) {
   // ---- fila de envio
   async function enfileirar(op) {
     op.criado = Date.now(); op.erros = 0;
-    aplicar(op); indexarFotos(op);
-    op.seq = await idbReq(db, "fila", "readwrite", (s) => s.add(op));
+    indexarFotos(op);
+    // fotos vão para o banco do celular como ArrayBuffer (alguns navegadores recusam Blob no IndexedDB)
+    for (const f of op.fotos || []) if (f.blob) { f.buf = await f.blob.arrayBuffer(); f.type = f.blob.type || "image/jpeg"; delete f.blob; }
+    try {
+      op.seq = await idbReq(db, "fila", "readwrite", (s) => s.add(op));
+    } catch (e) {
+      // plano B: se não conseguir guardar no celular, envia direto (precisa de sinal)
+      console.error("IndexedDB recusou", e);
+      if (!navigator.onLine) throw new Error("Não foi possível guardar no celular sem internet. Tente de novo com sinal.");
+      await R.executar(op);
+      aplicar(op); avisar();
+      return;
+    }
+    aplicar(op);
     fila.push(op); avisar();
     sincronizar();
   }
@@ -531,7 +544,10 @@ async function ComOffline(R) {
 
   async function prepararFotos(empId, unidadeId, blobs) {
     const out = [];
-    for (const b of blobs || []) out.push({ path: `${empId}/${unidadeId}/${uid()}.jpg`, blob: await comprimir(b) });
+    for (const b of blobs || []) {
+      let blob; try { blob = await comprimir(b); } catch (e) { console.error(e); blob = b; } // se não der para reduzir, envia a original
+      out.push({ path: `${empId}/${unidadeId}/${uid()}.jpg`, blob });
+    }
     return out;
   }
   const precisaRede = (fn) => async (...a) => {
