@@ -1240,7 +1240,7 @@ async function telaVistoria(unidadeId) {
       <h2>Ocorrências <span class="muted small">(${os.length}${pend ? `, ${pend} pendente(s)` : ""})</span></h2>
       ${os.length ? `<div class="chips" id="fc">${comodos.map((c) => `<span class="chip ${filtroComodo === c ? "on" : ""}" data-c="${esc(c)}">${esc(c)}${c !== "Todos" ? `<span class="n">${porComodo[c]}</span>` : ""}</span>`).join("")}</div><div style="height:12px"></div>` : ""}
       <div class="list" id="occs">${lista.length ? await cardsOcorrencias(lista) : `<div class="empty">Nenhuma ocorrência anotada${concluida ? "" : " ainda. Toque em <b>Anotar ocorrência</b> quando o cliente apontar algo."}</div>`}</div>
-      ${concluida ? `<div class="card" style="margin-top:16px;background:var(--green-soft);border-color:rgba(60,207,130,.4)"><b>Vistoria concluída</b> às ${fmtHora(v.concluida_em)}.${v.chaves === "retidas" ? `<div class="small row" style="margin-top:8px">${ic("cadeado","sm")} Chaves com a Construfase para reparos · prazo <b>${fmtData(v.prazo_reparo)}</b></div>` : v.chaves === "entregues" ? `<div class="small row" style="margin-top:8px">${ic("chave","sm")} Chaves entregues ao cliente</div>` : ""}<div class="row" style="margin-top:10px">${CFG.TERMO_IMPRESSO ? `<a class="btn sm" href="#/termo/${u.id}">${ic("impressora")} Imprimir termo</a>` : ""}<button class="btn sm" id="btnReabrir">Reabrir vistoria</button></div></div>` : ""}
+      ${concluida ? `<div class="card" style="margin-top:16px;background:var(--green-soft);border-color:rgba(60,207,130,.4)"><b>Vistoria concluída</b> às ${fmtHora(v.concluida_em)}.${v.chaves === "retidas" ? `<div class="small row" style="margin-top:8px">${ic("cadeado","sm")} Chaves com a Construfase para reparos · prazo <b>${fmtData(v.prazo_reparo)}</b></div><button class="btn primary block" id="btnEntregar" style="margin-top:10px">${ic("chave")} Chaves entregues ao cliente</button>` : v.chaves === "entregues" ? `<div class="small row" style="margin-top:8px">${ic("chave","sm")} Chaves entregues ao cliente</div>` : ""}<div class="row" style="margin-top:10px">${CFG.TERMO_IMPRESSO ? `<a class="btn sm" href="#/termo/${u.id}">${ic("impressora")} Imprimir termo</a>` : ""}<button class="btn sm" id="btnReabrir">Reabrir vistoria</button></div></div>` : ""}
       ${EU.papel !== "vistoriador" ? `<button class="btn danger block" id="btnCancVist" style="margin-top:18px">${ic("lixo")} Apagar esta vistoria</button><p class="muted small" style="margin:6px 2px 0">Para vistoria iniciada por engano: apaga a vistoria e as ocorrências dela e a unidade volta para pendente.</p>` : ""}
     `);
     ligarPlanta();
@@ -1249,6 +1249,11 @@ async function telaVistoria(unidadeId) {
       na_hora: async (id) => { await S.atualizarOcorrencia(id, { status: "resolvida_na_hora" }); toast("Marcada como resolvida na hora"); carregar(); },
       editar: (id) => formOcorrencia(u, v, os.find((o) => o.id === id), carregar),
     });
+    const be = $("#btnEntregar");
+    if (be) be.onclick = async () => {
+      if (!(await confirmar(`Confirmar que as chaves de ${unidadeNome(u)} foram entregues ao cliente?`, "Entregues"))) return;
+      await S.atualizarVistoria(v.id, { chaves: "entregues" }); toast("Chaves entregues ao cliente"); carregar();
+    };
     const cv = $("#btnCancVist");
     if (cv) cv.onclick = async () => {
       if (!(await confirmar(`Apagar a vistoria de ${unidadeNome(u)}${os.length ? ` e ${os.length} ocorrência(s)` : ""}? A unidade volta para pendente. Não dá para desfazer.`, "Apagar"))) return;
