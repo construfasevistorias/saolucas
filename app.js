@@ -241,7 +241,7 @@ function DemoStore() {
     async novaOcorrencia(o, blobs) {
       const fotos = [];
       for (const b of blobs) { const p = `demo/${uid()}.jpg`; db.fotos[p] = await blobToDataURL(await comprimir(b, 900, 0.7)); fotos.push(p); }
-      const row = { id: uid(), status: "aberta", criado_por: meId(), criado_em: new Date().toISOString(), atualizado_em: new Date().toISOString(), ...o, fotos };
+      const row = { id: uid(), status: "aberta", criado_por: meId(), criado_em: new Date().toISOString(), atualizado_em: new Date().toISOString(), ...o, fotos: [...(o.fotos || []), ...fotos] };
       db.ocorrencias.push(row); save(); return row;
     },
     async atualizarOcorrencia(id, patch, novasFotos = []) {
@@ -249,7 +249,7 @@ function DemoStore() {
       for (const b of novasFotos) { const p = `demo/${uid()}.jpg`; db.fotos[p] = await blobToDataURL(await comprimir(b, 900, 0.7)); (patch.fotos = patch.fotos || [...o.fotos]).push(p); }
       Object.assign(o, patch, { atualizado_em: new Date().toISOString(), atualizado_por: meId() }); save(); return o;
     },
-    async apagarOcorrencia(id) { const o = db.ocorrencias.find((x) => x.id === id); (o?.fotos || []).forEach((p) => delete db.fotos[p]); db.ocorrencias = db.ocorrencias.filter((x) => x.id !== id); save(); },
+    async apagarOcorrencia(id) { const o = db.ocorrencias.find((x) => x.id === id); const usadas = new Set(db.ocorrencias.filter((x) => x.id !== id).flatMap((x) => x.fotos || [])); (o?.fotos || []).filter((p) => !usadas.has(p)).forEach((p) => delete db.fotos[p]); db.ocorrencias = db.ocorrencias.filter((x) => x.id !== id); save(); },
     async fotoUrls(paths) { const r = {}; paths.forEach((p) => (r[p] = db.fotos[p] || "")); return r; },
     async base() { return db.base; },
     async salvarBase(item) {
@@ -361,7 +361,7 @@ async function SupaStore() {
     async ocorrenciasUnidade(unidadeId) { return ok(await sb.from("ocorrencias").select("*").eq("unidade_id", unidadeId).order("criado_em")); },
     async novaOcorrencia(o, blobs) {
       const fotos = await subirFotos(o.empreendimento_id, o.unidade_id, blobs);
-      return ok(await sb.from("ocorrencias").insert({ ...o, fotos, criado_por: eu?.id }).select().single());
+      return ok(await sb.from("ocorrencias").insert({ ...o, fotos: [...(o.fotos || []), ...fotos], criado_por: eu?.id }).select().single());
     },
     async atualizarOcorrencia(id, patch, novasFotos = []) {
       if (novasFotos.length) {
@@ -373,7 +373,10 @@ async function SupaStore() {
     },
     async apagarOcorrencia(id) {
       const o = ok(await sb.from("ocorrencias").select("fotos").eq("id", id).single());
-      if (o.fotos?.length) await sb.storage.from("fotos").remove(o.fotos);
+      const outras = o.fotos?.length ? ok(await sb.from("ocorrencias").select("fotos").overlaps("fotos", o.fotos).neq("id", id)) : [];
+      const usadas = new Set(outras.flatMap((x) => x.fotos || []));
+      const remover = (o.fotos || []).filter((p) => !usadas.has(p));
+      if (remover.length) await sb.storage.from("fotos").remove(remover);
       ok(await sb.from("ocorrencias").delete().eq("id", id));
     },
     // Executa uma alteração da fila do modo sem internet (pode repetir sem duplicar)
@@ -620,7 +623,7 @@ async function ComOffline(R) {
     async novaOcorrencia(o, blobs) {
       const fotos = await prepararFotos(o.empreendimento_id, o.unidade_id, blobs);
       const agora = new Date().toISOString();
-      const dados = { ...o, id: uid(), fotos: fotos.map((f) => f.path), criado_por: R.euId || null, criado_em: agora, atualizado_em: agora };
+      const dados = { ...o, id: uid(), fotos: [...(o.fotos || []), ...fotos.map((f) => f.path)], criado_por: R.euId || null, criado_em: agora, atualizado_em: agora };
       await enfileirar({ tipo: "occ_ins", dados, fotos });
       return { ...dados };
     },
@@ -632,7 +635,11 @@ async function ComOffline(R) {
       await enfileirar({ tipo: "occ_upd", id, patch: p, fotos });
       return { ...(porId("ocorrencias", id) || { id }) };
     },
-    async apagarOcorrencia(id) { const o = porId("ocorrencias", id); await enfileirar({ tipo: "occ_del", id, remover: (o && o.fotos) || [] }); },
+    async apagarOcorrencia(id) {
+      const o = porId("ocorrencias", id);
+      const usadas = new Set(M.ocorrencias.filter((x) => x.id !== id).flatMap((x) => x.fotos || []));
+      await enfileirar({ tipo: "occ_del", id, remover: ((o && o.fotos) || []).filter((p) => !usadas.has(p)) });
+    },
     async fotoUrls(paths) {
       const r = {}, rede = paths.filter((p) => !fotoLocal[p]);
       let u = {};
@@ -1394,12 +1401,14 @@ function concluirVistoria(u, v, os, depois) {
 function formOcorrencia(u, v, existente, depois, comodoInicial) {
   const ed = existente || {};
   let comodo = ed.comodo || comodoInicial || "", area = ed.area || "", gravidade = ed.gravidade || "media";
+  const varios = !existente; // na ocorrência nova dá para marcar vários cômodos (vira uma ocorrência por cômodo)
+  const selComodos = new Set(comodo ? [comodo] : []);
   let novasFotos = [], fotosAtuais = [...(ed.fotos || [])], sug = ed.sugestao ? { solucao: ed.sugestao, resolve_na_hora: ed.resolve_na_hora, equipe: ed.equipe, corriqueiro: ed.corriqueiro } : null;
   let ouvindo = null;
 
   const chipsHTML = (lista, sel, attr) => lista.map((x) => `<span class="chip ${sel === x ? "on" : ""}" data-${attr}="${esc(x)}">${esc(x)}</span>`).join("");
   const body = `
-    <label class="f">1 · Cômodo <span style="text-transform:none;letter-spacing:0;font-weight:500">· ${esc(u.tipologia || "")}</span></label><div class="opts rooms" id="cC">${comodosDe(u).map((x) => `<span class="opt ${comodo === x ? "on" : ""}" data-c="${esc(x)}">${esc(x)}</span>`).join("")}<span class="opt" data-c="__outro">${ic("plus", "sm")} Outro</span></div>
+    <label class="f">1 · Cômodo <span style="text-transform:none;letter-spacing:0;font-weight:500">· ${varios ? "pode marcar mais de um" : esc(u.tipologia || "")}</span></label><div class="opts rooms" id="cC">${comodosDe(u).map((x) => `<span class="opt ${comodo === x ? "on" : ""}" data-c="${esc(x)}">${esc(x)}</span>`).join("")}<span class="opt" data-c="__outro">${ic("plus", "sm")} Outro</span></div>
     <label class="f">2 · Área</label><div class="opts" id="cA">${AREAS.map((x) => `<span class="opt ${area === x ? "on" : ""}" data-a="${esc(x)}">${ic(x)}${esc(x)}</span>`).join("")}</div>
     <label class="f">3 · Foto</label>
     <div class="photos" id="fts"></div>
@@ -1422,6 +1431,14 @@ function formOcorrencia(u, v, existente, depois, comodoInicial) {
     const marcar = (box, attr, val) => box.querySelectorAll(`[data-${attr}]`).forEach((c) => c.classList.toggle("on", c.dataset[attr] === val));
     $("#cC", el).onclick = async (e) => {
       const c = e.target.closest("[data-c]"); if (!c) return;
+      if (varios) {
+        let nome = c.dataset.c;
+        if (nome === "__outro") { const n = await perguntar("Nome do local", "Ex.: Hall, Escada, Garagem"); if (!n) return; nome = n.trim(); c.insertAdjacentHTML("beforebegin", `<span class="opt" data-c="${esc(nome)}">${esc(nome)}</span>`); selComodos.add(nome); }
+        else if (selComodos.has(nome)) selComodos.delete(nome); else selComodos.add(nome);
+        $("#cC", el).querySelectorAll("[data-c]").forEach((x) => x.classList.toggle("on", selComodos.has(x.dataset.c)));
+        comodo = [...selComodos][0] || "";
+        return;
+      }
       if (c.dataset.c === "__outro") { const n = await perguntar("Nome do local", "Ex.: Hall, Escada, Garagem"); if (!n) return; comodo = n; c.insertAdjacentHTML("beforebegin", `<span class="opt" data-c="${esc(comodo)}">${esc(comodo)}</span>`); }
       else comodo = c.dataset.c;
       marcar($("#cC", el), "c", comodo);
@@ -1496,7 +1513,7 @@ function formOcorrencia(u, v, existente, depois, comodoInicial) {
     // Salvar
     const salvar = async (statusFinal) => {
       const descricao = $("#desc", el).value.trim();
-      if (!comodo) return toast("Escolha o cômodo");
+      if (varios ? !selComodos.size : !comodo) return toast("Escolha o cômodo");
       if (!area) return toast("Escolha a área");
       if (!descricao) return toast("Descreva a ocorrência");
       const btns = el.querySelectorAll(".ft .btn"); btns.forEach((x) => (x.disabled = true));
@@ -1509,9 +1526,20 @@ function formOcorrencia(u, v, existente, depois, comodoInicial) {
         status: statusFinal,
       };
       try {
+        let qtd = 1;
         if (existente) await S.atualizarOcorrencia(existente.id, { ...dados, fotos: fotosAtuais }, novasFotos);
-        else await S.novaOcorrencia({ ...dados, vistoria_id: v.id, unidade_id: u.id, empreendimento_id: u.empreendimento_id }, novasFotos);
-        fechar(); toast(statusFinal === "resolvida_na_hora" ? "Anotada como resolvida na hora" : "Ocorrência salva"); depois();
+        else {
+          // uma ocorrência por cômodo marcado; as fotos sobem uma vez só e ficam nas duas/três
+          const ordem = comodosDe(u);
+          const lista = [...selComodos].sort((a, b) => (ordem.indexOf(a) + 1 || 99) - (ordem.indexOf(b) + 1 || 99));
+          let fotosJa = null; qtd = lista.length;
+          for (const c of lista) {
+            const base = { ...dados, comodo: c, vistoria_id: v.id, unidade_id: u.id, empreendimento_id: u.empreendimento_id };
+            const row = fotosJa ? await S.novaOcorrencia({ ...base, fotos: fotosJa }, []) : await S.novaOcorrencia(base, novasFotos);
+            if (!fotosJa) fotosJa = row.fotos || [];
+          }
+        }
+        fechar(); toast(qtd > 1 ? `${qtd} ocorrências salvas (${[...selComodos].join(", ")})` : statusFinal === "resolvida_na_hora" ? "Anotada como resolvida na hora" : "Ocorrência salva"); depois();
       } catch (e) {
         console.error(e); toast("Erro ao salvar: " + e.message, 4000); btns.forEach((x) => (x.disabled = false));
       }
