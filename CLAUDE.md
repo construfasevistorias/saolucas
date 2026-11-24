@@ -67,6 +67,12 @@ cliente vai ao escritório da obra assinar o termo. O engenheiro não vê nada e
   direto em auth.users/auth.identities com senha provisória e `trocar_senha: true` → `telaTrocarSenha` obrigatória
   no 1º acesso. Usuários: eduardo, renata, maria, ricardo, henrique, wesley, junior, joao, gabriel, mario, ana.
 
+## Fotos e vídeos (24/11/2026)
+- Formulário: Foto (câmera, oferece marcar), Vídeo (câmera) e Galeria (fotos e vídeos). Editor `desenharNaFoto()`
+  com flecha, círculo e traço livre (vermelho/amarelo/branco). Vídeo vai sem compressão, limite `LIMITE_VIDEO_MB` = 45
+  (Supabase grátis: 50 MB por arquivo, 1 GB no total). Vídeos ficam no mesmo bucket `fotos` e no mesmo campo `fotos[]`
+  (`ehVideo()` pela extensão). Relatórios e termo usam só fotos.
+
 ## Custo zero (decisão do Eduardo, 17/11/2026)
 - Supabase plano Free + GitHub Pages. `IA: false` no config.js: sugestões só pela base (`sugestaoLocal`),
   sem chamar a Edge Function `sugerir`. A IA paga fica pronta para ligar depois (`IA: true`).

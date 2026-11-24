@@ -89,10 +89,10 @@ function toast(msg, ms = 2600) {
   document.body.appendChild(t);
   setTimeout(() => t.remove(), ms);
 }
-function zoom(src) {
+function zoom(src, video) {
   const z = document.createElement("div");
-  z.className = "zoom"; z.innerHTML = `<img src="${esc(src)}" alt="">`;
-  z.onclick = () => z.remove();
+  z.className = "zoom"; z.innerHTML = video ? `<video src="${esc(src)}" controls autoplay playsinline></video><button class="btn sm" style="position:absolute;top:14px;right:14px">Fechar</button>` : `<img src="${esc(src)}" alt="">`;
+  z.onclick = (e) => { if (!video || e.target === z || e.target.tagName === "BUTTON") z.remove(); };
   document.body.appendChild(z);
 }
 function beep() {
@@ -242,7 +242,10 @@ function DemoStore() {
     async ocorrenciasUnidade(unidadeId) { return db.ocorrencias.filter((o) => o.unidade_id === unidadeId); },
     async novaOcorrencia(o, blobs) {
       const fotos = [];
-      for (const b of blobs) { const p = `demo/${uid()}.jpg`; db.fotos[p] = await blobToDataURL(await comprimir(b, 900, 0.7)); fotos.push(p); }
+      for (const b of blobs) {
+        if (ehVideo(b)) { const p = `demo/${uid()}.${extVideo(b.type)}`; db.fotos[p] = URL.createObjectURL(b); fotos.push(p); continue; }
+        const p = `demo/${uid()}.jpg`; db.fotos[p] = await blobToDataURL(await comprimir(b, 900, 0.7)); fotos.push(p);
+      }
       const row = { id: uid(), status: "aberta", criado_por: meId(), criado_em: new Date().toISOString(), atualizado_em: new Date().toISOString(), ...o, fotos: [...(o.fotos || []), ...fotos] };
       db.ocorrencias.push(row); save(); return row;
     },
@@ -281,7 +284,7 @@ async function SupaStore() {
   // Com sinal fraco a requisição pode ficar "pendurada": corta e deixa o modo sem internet assumir
   const fetchComTempo = (url, opt = {}) => {
     const ctl = new AbortController();
-    const t = setTimeout(() => ctl.abort(), /\/storage\/v1\/object/.test(String(url)) ? 90000 : 15000);
+    const t = setTimeout(() => ctl.abort(), /\/storage\/v1\/object/.test(String(url)) ? 300000 : 15000);
     if (opt.signal) opt.signal.addEventListener("abort", () => ctl.abort());
     return fetch(url, { ...opt, signal: ctl.signal }).finally(() => clearTimeout(t));
   };
@@ -310,9 +313,10 @@ async function SupaStore() {
   async function subirFotos(empId, unidadeId, blobs) {
     const paths = [];
     for (const b of blobs) {
-      const c = await comprimir(b);
-      const p = `${empId}/${unidadeId}/${uid()}.jpg`;
-      ok(await sb.storage.from("fotos").upload(p, c, { contentType: "image/jpeg", upsert: false }));
+      const vid = ehVideo(b);
+      const c = vid ? b : await comprimir(b);
+      const p = `${empId}/${unidadeId}/${uid()}.${vid ? extVideo(b.type) : "jpg"}`;
+      ok(await sb.storage.from("fotos").upload(p, c, { contentType: vid ? b.type || "video/mp4" : "image/jpeg", upsert: false }));
       paths.push(p);
     }
     return paths;
@@ -385,8 +389,9 @@ async function SupaStore() {
     async executar(op) {
       for (const f of op.fotos || []) {
         // sem "upsert" (o banco só permite enviar, não substituir); se a foto já subiu antes, segue
-        const blob = f.blob || new Blob([f.buf], { type: f.type || "image/jpeg" });
-        const r = await sb.storage.from("fotos").upload(f.path, blob, { contentType: "image/jpeg" });
+        const tipo = f.type || tipoArquivo(f.path);
+        const blob = f.blob || new Blob([f.buf], { type: tipo });
+        const r = await sb.storage.from("fotos").upload(f.path, blob, { contentType: tipo });
         if (r.error && !/already exists|duplicate|409/i.test(String(r.error.message) + " " + (r.error.statusCode || ""))) throw new Error(r.error.message);
       }
       if (op.tipo === "vist_ins") {
@@ -501,7 +506,7 @@ async function ComOffline(R) {
   }
   // fotos que ainda não subiram aparecem direto do celular
   const fotoLocal = {};
-  const indexarFotos = (op) => (op.fotos || []).forEach((f) => { if (!fotoLocal[f.path]) fotoLocal[f.path] = URL.createObjectURL(f.blob || new Blob([f.buf], { type: f.type || "image/jpeg" })); });
+  const indexarFotos = (op) => (op.fotos || []).forEach((f) => { if (!fotoLocal[f.path]) fotoLocal[f.path] = URL.createObjectURL(f.blob || new Blob([f.buf], { type: f.type || tipoArquivo(f.path) })); });
   fila.forEach(indexarFotos);
 
   // ---- leitura: internet (até 6 s) ou cópia local; a fila é reaplicada por cima
@@ -528,7 +533,7 @@ async function ComOffline(R) {
     op.criado = Date.now(); op.erros = 0;
     indexarFotos(op);
     // fotos vão para o banco do celular como ArrayBuffer (alguns navegadores recusam Blob no IndexedDB)
-    for (const f of op.fotos || []) if (f.blob) { f.buf = await f.blob.arrayBuffer(); f.type = f.blob.type || "image/jpeg"; delete f.blob; }
+    for (const f of op.fotos || []) if (f.blob) { f.buf = await f.blob.arrayBuffer(); f.type = f.blob.type || tipoArquivo(f.path); delete f.blob; }
     try {
       op.seq = await idbReq(db, "fila", "readwrite", (s) => s.add(op));
     } catch (e) {
@@ -572,6 +577,7 @@ async function ComOffline(R) {
   async function prepararFotos(empId, unidadeId, blobs) {
     const out = [];
     for (const b of blobs || []) {
+      if (ehVideo(b)) { out.push({ path: `${empId}/${unidadeId}/${uid()}.${extVideo(b.type)}`, blob: b }); continue; }
       let blob; try { blob = await comprimir(b); } catch (e) { console.error(e); blob = b; } // se não der para reduzir, envia a original
       out.push({ path: `${empId}/${unidadeId}/${uid()}.jpg`, blob });
     }
@@ -988,7 +994,7 @@ async function telaRelatorio() {
           <td>${v?.status === "concluida" ? (v.chaves === "retidas" ? `Retidas · até ${fmtData(v.prazo_reparo)}` : v.chaves === "entregues" ? "Entregues" : "Concluída") : "Em andamento"}</td></tr>`;
       }).join("");
       let fotos = {};
-      if (f.fotos) { const ps = pend.flatMap((o) => (o.fotos || []).slice(0, 2)); if (ps.length) fotos = await S.fotoUrls(ps); }
+      if (f.fotos) { const ps = pend.flatMap((o) => (o.fotos || []).filter((p) => !ehVideo(p)).slice(0, 2)); if (ps.length) fotos = await S.fotoUrls(ps); }
       html = `${cab(`Resumo das vistorias · ${esc(EMP.nome)}`, `${esc(diaSemana(f.data).replace(/^./, (c) => c.toUpperCase()))} · ${PERIODOS[f.periodo]}`)}
         <div class="kpis">${kpi(tocadas.size, "unidades vistoriadas")}${kpi(vFim.length, "vistorias concluídas")}${kpi(occ.length, "ocorrências anotadas")}${kpi(naHora, "resolvidas na hora")}${kpi(pend.length, "pendentes")}${kpi(vFim.filter((v) => v.chaves === "retidas").length, "chaves retidas")}</div>
         <p class="sm">Andamento da entrega: <b>${concluidasTotal} de ${us.length}</b> unidades concluídas (${pct(concluidasTotal, us.length)}%).</p>
@@ -1001,7 +1007,7 @@ async function telaRelatorio() {
         <h2>Pendências para a engenharia (${pend.length})</h2>
         ${pend.length ? `<table><tr><th>Unidade</th><th>Cômodo · Área</th><th>Descrição</th><th>Grav.</th><th>Situação</th></tr>
           ${pend.slice().sort((a, b) => sortUnidades(uMap[a.unidade_id] || {}, uMap[b.unidade_id] || {})).map((o) => `<tr><td>${esc(uMap[o.unidade_id] ? unidadeNome(uMap[o.unidade_id]) : "")}</td><td>${esc(o.comodo)} · ${esc(o.area)}</td>
-            <td>${esc(o.descricao)}${o.corriqueiro === false ? ` <i>(fora da lista FS014-02)</i>` : ""}${f.fotos && o.fotos?.length ? `<div class="fotos">${o.fotos.slice(0, 2).map((p) => fotos[p] ? `<img src="${esc(fotos[p])}" alt="">` : "").join("")}</div>` : ""}</td>
+            <td>${esc(o.descricao)}${o.corriqueiro === false ? ` <i>(fora da lista FS014-02)</i>` : ""}${f.fotos && o.fotos?.length ? `<div class="fotos">${o.fotos.filter((p) => !ehVideo(p)).slice(0, 2).map((p) => fotos[p] ? `<img src="${esc(fotos[p])}" alt="">` : "").join("")}</div>` : ""}</td>
             <td>${o.gravidade === "media" ? "média" : o.gravidade}</td><td>${esc(situacaoOcc(o))}</td></tr>`).join("")}</table>` : `<p class="vazio">Nenhuma pendência. 👏</p>`}`;
     } else {
       const vistUni = new Set(vs.filter((v) => noPeriodo(v.iniciada_em)).map((v) => v.unidade_id));
@@ -1247,6 +1253,76 @@ async function telaUnidades() {
   vincular(meu, S.assinar(EMP.id, carregar));
 }
 
+// ---------------------------------------------------------- fotos e vídeos: tipo, visualização e desenho
+const ehVideo = (p) => /\.(mp4|mov|webm|m4v|3gp)$/i.test(String(p || "")) || /^video\//.test(String(p?.type || ""));
+const extVideo = (t) => (/quicktime/.test(t) ? "mov" : /webm/.test(t) ? "webm" : /3gpp/.test(t) ? "3gp" : "mp4");
+const LIMITE_VIDEO_MB = 45; // o Supabase grátis aceita até 50 MB por arquivo
+const tipoArquivo = (path) => ({ mov: "video/quicktime", webm: "video/webm", "3gp": "video/3gpp", mp4: "video/mp4", m4v: "video/mp4" })[String(path).split(".").pop().toLowerCase()] || "image/jpeg";
+function midiaThumb(path, url, cls = "thumb") {
+  if (ehVideo(path)) return `<span class="vthumb"><video class="${cls}" src="${esc(url)}#t=0.1" preload="metadata" muted playsinline data-zoom="${esc(url)}" data-video="1"></video><span class="play">▶</span></span>`;
+  return `<img class="${cls}" src="${esc(url)}" data-zoom="${esc(url)}" alt="Foto da ocorrência">`;
+}
+
+// Editor para marcar a foto: flecha, círculo e traço livre, em vermelho/amarelo/branco
+function desenharNaFoto(blob) {
+  return new Promise((resolver) => {
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onerror = () => { URL.revokeObjectURL(url); toast("Não foi possível abrir a foto"); resolver(null); };
+    img.onload = () => {
+      const max = 1600, k = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight));
+      const W = Math.round(img.naturalWidth * k), H = Math.round(img.naturalHeight * k);
+      const ed = document.createElement("div");
+      ed.className = "editor";
+      ed.innerHTML = `<div class="ed-bar">
+          <button class="btn sm" data-x="cancelar">Cancelar</button>
+          <span class="ed-grp">${[["flecha", "➚ Flecha"], ["circulo", "◯ Círculo"], ["livre", "✎ Livre"]].map(([k, t]) => `<button class="chip ${k === "flecha" ? "on" : ""}" data-f="${k}">${t}</button>`).join("")}</span>
+          <span class="ed-grp">${["#ff3b30", "#ffd60a", "#ffffff"].map((c, i) => `<button class="ed-cor ${i ? "" : "on"}" data-c="${c}" style="background:${c}" aria-label="cor"></button>`).join("")}</span>
+          <button class="btn sm" data-x="desfazer">↶ Desfazer</button>
+          <button class="btn sm primary" data-x="pronto">Pronto</button>
+        </div>
+        <div class="ed-area"><canvas width="${W}" height="${H}"></canvas></div>
+        <div class="ed-dica">Arraste o dedo na foto para marcar.</div>`;
+      document.body.appendChild(ed);
+      const cv = ed.querySelector("canvas"), cx = cv.getContext("2d");
+      let ferramenta = "flecha", cor = "#ff3b30", atual = null;
+      const formas = [];
+      const lw = Math.max(4, Math.round(Math.max(W, H) / 160));
+      const ponto = (e) => { const r = cv.getBoundingClientRect(); return [((e.clientX - r.left) / r.width) * W, ((e.clientY - r.top) / r.height) * H]; };
+      function forma(f) {
+        cx.strokeStyle = f.cor; cx.fillStyle = f.cor; cx.lineWidth = lw; cx.lineCap = "round"; cx.lineJoin = "round";
+        cx.shadowColor = "rgba(0,0,0,.55)"; cx.shadowBlur = lw;
+        const [a, b] = [f.pts[0], f.pts[f.pts.length - 1]];
+        if (f.tipo === "livre") { cx.beginPath(); f.pts.forEach(([x, y], i) => (i ? cx.lineTo(x, y) : cx.moveTo(x, y))); cx.stroke(); }
+        else if (f.tipo === "circulo") { cx.beginPath(); cx.ellipse((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, Math.abs(b[0] - a[0]) / 2 + 1, Math.abs(b[1] - a[1]) / 2 + 1, 0, 0, Math.PI * 2); cx.stroke(); }
+        else {
+          const ang = Math.atan2(b[1] - a[1], b[0] - a[0]), cab = lw * 4.5;
+          cx.beginPath(); cx.moveTo(a[0], a[1]); cx.lineTo(b[0] - Math.cos(ang) * cab * 0.6, b[1] - Math.sin(ang) * cab * 0.6); cx.stroke();
+          cx.beginPath(); cx.moveTo(b[0], b[1]);
+          cx.lineTo(b[0] - cab * Math.cos(ang - 0.45), b[1] - cab * Math.sin(ang - 0.45));
+          cx.lineTo(b[0] - cab * Math.cos(ang + 0.45), b[1] - cab * Math.sin(ang + 0.45)); cx.closePath(); cx.fill();
+        }
+        cx.shadowBlur = 0;
+      }
+      const redesenhar = () => { cx.drawImage(img, 0, 0, W, H); formas.forEach(forma); if (atual) forma(atual); };
+      redesenhar();
+      cv.onpointerdown = (e) => { cv.setPointerCapture(e.pointerId); atual = { tipo: ferramenta, cor, pts: [ponto(e)] }; };
+      cv.onpointermove = (e) => { if (!atual) return; if (atual.tipo === "livre") atual.pts.push(ponto(e)); else atual.pts[1] = ponto(e); redesenhar(); };
+      cv.onpointerup = cv.onpointercancel = () => { if (atual && atual.pts.length > 1) formas.push(atual); atual = null; redesenhar(); };
+      ed.querySelectorAll("[data-f]").forEach((b) => (b.onclick = () => { ferramenta = b.dataset.f; ed.querySelectorAll("[data-f]").forEach((x) => x.classList.toggle("on", x === b)); }));
+      ed.querySelectorAll("[data-c]").forEach((b) => (b.onclick = () => { cor = b.dataset.c; ed.querySelectorAll("[data-c]").forEach((x) => x.classList.toggle("on", x === b)); }));
+      const fim = (r) => { ed.remove(); URL.revokeObjectURL(url); resolver(r); };
+      ed.querySelector('[data-x="desfazer"]').onclick = () => { formas.pop(); redesenhar(); };
+      ed.querySelector('[data-x="cancelar"]').onclick = () => fim(null);
+      ed.querySelector('[data-x="pronto"]').onclick = () => {
+        if (!formas.length) return fim(null);
+        cv.toBlob((b) => fim(b ? new File([b], "foto-marcada.jpg", { type: "image/jpeg" }) : null), "image/jpeg", 0.88);
+      };
+    };
+    img.src = url;
+  });
+}
+
 // ---------------------------------------------------------- cartão de ocorrência
 async function cardsOcorrencias(lista, { modo = "vistoria", novos = new Set(), unidades = {} } = {}) {
   const paths = lista.flatMap((o) => o.fotos || []);
@@ -1254,7 +1330,7 @@ async function cardsOcorrencias(lista, { modo = "vistoria", novos = new Set(), u
   return lista.map((o) => {
     const u = unidades[o.unidade_id];
     const quem = PERFIS[o.criado_por]?.nome || "";
-    const thumbs = (o.fotos || []).slice(0, 3).map((p) => `<img class="thumb" src="${esc(urls[p])}" data-zoom="${esc(urls[p])}" alt="Foto da ocorrência">`).join("");
+    const thumbs = (o.fotos || []).slice(0, 3).map((p) => midiaThumb(p, urls[p])).join("");
     let acts = "";
     if (modo === "vistoria") {
       acts = `${o.status === "aberta" ? `<button class="btn sm green" data-act="na_hora" data-id="${o.id}">${ic("check")} Resolvido na hora</button>` : ""}
@@ -1276,7 +1352,7 @@ async function cardsOcorrencias(lista, { modo = "vistoria", novos = new Set(), u
   }).join("");
 }
 function ligarCards(raiz, handlers) {
-  raiz.querySelectorAll("[data-zoom]").forEach((i) => (i.onclick = () => zoom(i.dataset.zoom)));
+  raiz.querySelectorAll("[data-zoom]").forEach((i) => (i.onclick = () => zoom(i.dataset.zoom, !!i.dataset.video)));
   raiz.querySelectorAll("[data-act]").forEach((b) => (b.onclick = () => handlers[b.dataset.act] && handlers[b.dataset.act](b.dataset.id, b)));
 }
 
@@ -1405,9 +1481,11 @@ function formOcorrencia(u, v, existente, depois, comodoInicial) {
   const body = `
     <label class="f">1 · Cômodo <span style="text-transform:none;letter-spacing:0;font-weight:500">· ${varios ? "pode marcar mais de um" : esc(u.tipologia || "")}</span></label><div class="opts rooms" id="cC">${comodosDe(u).map((x) => `<span class="opt ${comodo === x ? "on" : ""}" data-c="${esc(x)}">${esc(x)}</span>`).join("")}<span class="opt" data-c="__outro">${ic("plus", "sm")} Outro</span></div>
     <label class="f">2 · Área</label><div class="opts" id="cA">${AREAS.map((x) => `<span class="opt ${area === x ? "on" : ""}" data-a="${esc(x)}">${ic(x)}${esc(x)}</span>`).join("")}</div>
-    <label class="f">3 · Foto</label>
+    <label class="f">3 · Fotos e vídeos</label>
     <div class="photos" id="fts"></div>
-    <input type="file" id="fileIn" accept="image/*" capture="environment" multiple class="hidden">
+    <input type="file" id="fileIn" accept="image/*" capture="environment" class="hidden">
+    <input type="file" id="fileVid" accept="video/*" capture="environment" class="hidden">
+    <input type="file" id="fileGal" accept="image/*,video/*" multiple class="hidden">
     <label class="f" for="desc">4 · O que o cliente apontou?</label>
     <div class="row" style="align-items:stretch"><textarea class="inp" id="desc" placeholder="Ex.: rejunte falhando atrás do vaso sanitário">${esc(ed.descricao || "")}</textarea></div>
     <div class="row" style="margin-top:8px"><button class="btn sm mic" id="mic" type="button">${ic("mic")} Falar</button><span class="muted small" id="micMsg"></span></div>
@@ -1445,15 +1523,35 @@ function formOcorrencia(u, v, existente, depois, comodoInicial) {
     // Fotos
     const desenharFotos = async () => {
       const urls = fotosAtuais.length ? await S.fotoUrls(fotosAtuais) : {};
+      const prev = (src, video) => video ? `<video src="${esc(src)}#t=0.1" preload="metadata" muted playsinline></video><span class="play">▶</span>` : `<img src="${esc(src)}" alt="">`;
       $("#fts", el).innerHTML =
-        fotosAtuais.map((p, i) => `<div class="ph"><img src="${esc(urls[p])}" alt=""><button class="rm" data-rmold="${i}" type="button">${ic("x")}</button></div>`).join("") +
-        novasFotos.map((f, i) => `<div class="ph"><img src="${URL.createObjectURL(f)}" alt=""><button class="rm" data-rmnew="${i}" type="button">${ic("x")}</button></div>`).join("") +
-        `<div class="addph" id="addph">${ic("camera")}Tirar foto</div>`;
+        fotosAtuais.map((p, i) => `<div class="ph">${prev(urls[p], ehVideo(p))}<button class="rm" data-rmold="${i}" type="button">${ic("x")}</button></div>`).join("") +
+        novasFotos.map((f, i) => `<div class="ph">${prev(URL.createObjectURL(f), ehVideo(f))}<button class="rm" data-rmnew="${i}" type="button">${ic("x")}</button>${ehVideo(f) ? "" : `<button class="desenhar" data-draw="${i}" type="button">✎ Marcar</button>`}</div>`).join("") +
+        `<div class="addph" id="addph">${ic("camera")}Foto</div><div class="addph" id="addvid"><span style="font-size:24px;line-height:1">🎥</span>Vídeo</div><div class="addph" id="addgal"><span style="font-size:24px;line-height:1">🖼</span>Galeria</div>`;
       $("#addph", el).onclick = () => $("#fileIn", el).click();
+      $("#addvid", el).onclick = () => $("#fileVid", el).click();
+      $("#addgal", el).onclick = () => $("#fileGal", el).click();
+      el.querySelectorAll("[data-draw]").forEach((b) => (b.onclick = async () => { const i = +b.dataset.draw; const r = await desenharNaFoto(novasFotos[i]); if (r) { novasFotos[i] = r; desenharFotos(); } }));
       el.querySelectorAll("[data-rmnew]").forEach((b) => (b.onclick = () => { novasFotos.splice(+b.dataset.rmnew, 1); desenharFotos(); }));
       el.querySelectorAll("[data-rmold]").forEach((b) => (b.onclick = () => { fotosAtuais.splice(+b.dataset.rmold, 1); desenharFotos(); }));
     };
-    $("#fileIn", el).onchange = (e) => { novasFotos.push(...Array.from(e.target.files || [])); e.target.value = ""; desenharFotos(); };
+    const receber = async (e, marcar) => {
+      const arqs = Array.from(e.target.files || []); e.target.value = "";
+      for (const f of arqs) {
+        if (ehVideo(f) && f.size > LIMITE_VIDEO_MB * 1024 * 1024) { toast(`Vídeo grande demais (${Math.round(f.size / 1048576)} MB). Grave até uns 30 segundos.`, 6000); continue; }
+        if (!ehVideo(f) && !/^image\//.test(f.type || "image/")) continue;
+        novasFotos.push(f);
+      }
+      desenharFotos();
+      // foto recém-tirada: já oferece para marcar com flecha/círculo
+      if (marcar && arqs.length === 1 && !ehVideo(arqs[0])) {
+        const i = novasFotos.length - 1;
+        if (await confirmar("Quer marcar algum ponto nesta foto (flecha ou círculo)?", "Marcar")) { const r = await desenharNaFoto(novasFotos[i]); if (r) { novasFotos[i] = r; desenharFotos(); } }
+      }
+    };
+    $("#fileIn", el).onchange = (e) => receber(e, true);
+    $("#fileVid", el).onchange = (e) => receber(e, false);
+    $("#fileGal", el).onchange = (e) => receber(e, false);
     desenharFotos();
 
     // Ditado por voz (quando o navegador permite)
