@@ -780,6 +780,7 @@ async function rotear() {
     if (rota === "termo" && arg && CFG.TERMO_IMPRESSO) return telaTermo(arg);
     if (rota === "relatorio") return telaRelatorio();
     if (rota === "agenda") return telaAgenda();
+    if (rota === "normas") return telaNormas();
     if (rota === "usuarios") return telaUsuarios();
     if (rota === "cadastro") return telaCadastro();
     return telaInicio();
@@ -892,6 +893,7 @@ async function telaInicio() {
       ${EU.papel !== "vistoriador" ? item("#/agenda", "agenda", "Agenda de entrega", "Adicionar, mudar ou remover horários") : ""}
       ${EU.papel !== "vistoriador" ? item("#/relatorio", "relatorio", "Relatórios", "Resumo do dia e relatório geral em PDF") : ""}
       ${item("#/base", "base", "Base de soluções", "Problemas comuns e como resolver")}
+      ${item("#/normas", "relatorio", "Normas técnicas", "Critérios das NBRs para a vistoria")}
       ${item("#/cadastro", "predio", "Unidades e proprietários", "Cadastro e importação da planilha")}
     </div>`);
 }
@@ -1194,6 +1196,37 @@ async function telaUsuarios() {
   await carregar();
 }
 
+// ---------------------------------------------------------- normas técnicas (consulta)
+const NORMAS = window.NORMAS || { geral: [], areas: {}, aviso: "" };
+const normasDaArea = (area) => NORMAS.areas[area] || [];
+const normaPrincipal = (area) => normasDaArea(area)[0]?.norma || "";
+function normaItemHTML(n, completo = true) {
+  return `<div class="nrm-item"><div><b>${esc(n.norma)}</b>${n.titulo ? ` <span class="muted">· ${esc(n.titulo)}</span>` : ""}</div>
+    ${(n.criterios || []).length ? `<ul>${(completo ? n.criterios : n.criterios.slice(0, 2)).map((c) => `<li>${esc(c)}</li>`).join("")}</ul>` : ""}
+    ${n.resumo ? `<p>${esc(n.resumo)}</p>` : ""}
+    ${completo && n.verificar ? `<p><b>Como verificar:</b> ${esc(n.verificar)}</p>` : ""}
+    ${completo && n.dizer ? `<p><b>O que falar ao cliente:</b> “${esc(n.dizer)}”</p>` : ""}</div>`;
+}
+// Caixa que aparece no formulário ao escolher a área
+function normaBoxHTML(area) {
+  const ns = normasDaArea(area);
+  if (!ns.length) return "";
+  return `<div class="nrm-box"><div class="row" style="align-items:center"><b style="flex:1">📏 Norma de referência · ${esc(area)}</b>
+    <button class="btn sm" type="button" data-normas="${esc(area)}">Ver tudo</button></div>
+    ${ns.slice(0, 2).map((n) => normaItemHTML(n, false)).join("")}</div>`;
+}
+function verNormasArea(area) {
+  sheet(`<h3>📏 ${esc(area)}</h3>`, `${normasDaArea(area).map((n) => normaItemHTML(n)).join("")}<p class="muted small">${esc(NORMAS.aviso)}</p>`, `<button class="btn primary" data-close>Fechar</button>`);
+}
+function telaNormas() {
+  topo({ titulo: "Normas técnicas", sub: "Consulta rápida na vistoria", voltar: "#/" });
+  rodape("");
+  app(`<p class="sub">${esc(NORMAS.aviso)}</p>
+    <details class="card nrm-sec" open><summary><b>Gerais: garantia, prazos e manual</b></summary>${NORMAS.geral.map((n) => normaItemHTML(n)).join("")}</details>
+    ${AREAS.filter((a) => normasDaArea(a).length).map((a) => `<details class="card nrm-sec" id="nrm-${esc(a.replace(/\W+/g, "-"))}"><summary>${ic(a)} <b>${esc(a)}</b> <span class="muted small">· ${esc(normaPrincipal(a))}</span></summary>
+      ${normasDaArea(a).map((n) => normaItemHTML(n)).join("")}</details>`).join("")}`);
+}
+
 // ---------------------------------------------------------- lista de unidades (+ agenda)
 async function telaUnidades() {
   topo({ titulo: "Vistoria", sub: EMP.nome });
@@ -1481,6 +1514,7 @@ function formOcorrencia(u, v, existente, depois, comodoInicial) {
   const body = `
     <label class="f">1 · Cômodo <span style="text-transform:none;letter-spacing:0;font-weight:500">· ${varios ? "pode marcar mais de um" : esc(u.tipologia || "")}</span></label><div class="opts rooms" id="cC">${comodosDe(u).map((x) => `<span class="opt ${comodo === x ? "on" : ""}" data-c="${esc(x)}">${esc(x)}</span>`).join("")}<span class="opt" data-c="__outro">${ic("plus", "sm")} Outro</span></div>
     <label class="f">2 · Área</label><div class="opts" id="cA">${AREAS.map((x) => `<span class="opt ${area === x ? "on" : ""}" data-a="${esc(x)}">${ic(x)}${esc(x)}</span>`).join("")}</div>
+    <div id="normaBox">${area ? normaBoxHTML(area) : ""}</div>
     <label class="f">3 · Fotos e vídeos</label>
     <div class="photos" id="fts"></div>
     <input type="file" id="fileIn" accept="image/*" capture="environment" class="hidden">
@@ -1516,7 +1550,9 @@ function formOcorrencia(u, v, existente, depois, comodoInicial) {
       else comodo = c.dataset.c;
       marcar($("#cC", el), "c", comodo);
     };
-    $("#cA", el).onclick = (e) => { const c = e.target.closest("[data-a]"); if (!c) return; area = c.dataset.a; marcar($("#cA", el), "a", area); };
+    const mostrarNorma = () => { $("#normaBox", el).innerHTML = normaBoxHTML(area); const b = $("#normaBox [data-normas]", el); if (b) b.onclick = () => verNormasArea(b.dataset.normas); };
+    $("#cA", el).onclick = (e) => { const c = e.target.closest("[data-a]"); if (!c) return; area = c.dataset.a; marcar($("#cA", el), "a", area); mostrarNorma(); };
+    if (area) mostrarNorma();
     $("#cG", el).onclick = (e) => { const c = e.target.closest("[data-g]"); if (!c) return; gravidade = c.dataset.g; marcar($("#cG", el), "g", gravidade); };
     const cS = $("#cS", el); if (cS) cS.onclick = (e) => { const c = e.target.closest("[data-s]"); if (!c) return; status = c.dataset.s; marcar(cS, "s", status); };
 
@@ -1772,7 +1808,9 @@ async function telaBase() {
     $("#bl").innerHTML = l.length ? l.map((b) => `<div class="card" style="${b.ativo === false ? "opacity:.5" : ""}">
       <div class="row"><span class="muted small" style="flex:1">${esc(b.area)}${b.equipe ? " · " + esc(b.equipe) : ""}</span>${b.resolve_na_hora ? `<span class="tag resolvida">Resolve na hora</span>` : ""}${b.ativo === false ? `<span class="tag pendente">Desativado</span>` : ""}</div>
       <b style="display:block;margin:4px 0">${esc(b.problema)}</b><div class="small">${esc(b.solucao)}</div>
+      ${normaPrincipal(b.area) ? `<div class="small muted" style="margin-top:4px">📏 Norma: ${esc(normasDaArea(b.area).map((n) => n.norma).slice(0, 2).join(" · "))} <a href="javascript:void 0" data-nrm="${esc(b.area)}">ver critérios</a></div>` : ""}
       <div style="margin-top:8px"><button class="btn sm" data-ed="${b.id}">Editar</button></div></div>`).join("") : `<div class="empty">Nada encontrado.</div>`;
+    $("#bl").querySelectorAll("[data-nrm]").forEach((x) => (x.onclick = () => verNormasArea(x.dataset.nrm)));
     $("#bl").querySelectorAll("[data-ed]").forEach((x) => (x.onclick = () => editarBase(base.find((b) => b.id === x.dataset.ed), async () => { base = await S.base(); desenhar(); })));
   }
   desenhar();

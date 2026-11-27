@@ -73,6 +73,12 @@ cliente vai ao escritório da obra assinar o termo. O engenheiro não vê nada e
   (Supabase grátis: 50 MB por arquivo, 1 GB no total). Vídeos ficam no mesmo bucket `fotos` e no mesmo campo `fotos[]`
   (`ehVideo()` pela extensão). Relatórios e termo usam só fotos.
 
+## Normas técnicas (27/11/2026)
+- `normas.js` (`window.NORMAS`): resumo por área (critério, como verificar, o que falar) + gerais (CDC 90 dias,
+  NBR 17170, 14037/5674, 15575, FS014). Aparece: caixa no formulário ao escolher a área (`normaBoxHTML`), tela
+  `#/normas` e link na base de soluções. Só resumo (texto ABNT é protegido). Números conferidos: NBR 13753
+  (ressalto ≤ 1 mm; planeza 3 mm/2 m) e prazos NBR 17170 de cerâmica (conferir na norma impressa).
+
 ## Custo zero (decisão do Eduardo, 17/11/2026)
 - Supabase plano Free + GitHub Pages. `IA: false` no config.js: sugestões só pela base (`sugestaoLocal`),
   sem chamar a Edge Function `sugerir`. A IA paga fica pronta para ligar depois (`IA: true`).

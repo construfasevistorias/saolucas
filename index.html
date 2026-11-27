@@ -42,6 +42,14 @@ svg.i.lg{width:26px;height:26px} svg.i.sm{width:16px;height:16px;vertical-align:
 .top .back{width:42px;height:42px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--ink);display:flex;align-items:center;justify-content:center;cursor:pointer}
 .top .me{display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--line);color:var(--ink);border-radius:999px;padding:5px 12px 5px 5px;font-size:13.5px;font-weight:600;cursor:pointer}
 .avatar{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,var(--orange),var(--orange-dark));color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px}
+.nrm-box{margin-top:10px;padding:10px 12px;border-radius:12px;background:var(--blue-soft);border:1px solid rgba(100,160,255,.25);font-size:13px}
+.nrm-box .nrm-item{margin-top:8px}
+.nrm-item{padding:8px 0;border-top:1px solid var(--line);font-size:13.5px;line-height:1.45}
+.nrm-item:first-of-type{border-top:0}
+.nrm-item ul{margin:4px 0 4px 18px;padding:0}
+.nrm-item p{margin:4px 0}
+.nrm-sec summary{cursor:pointer;display:flex;align-items:center;gap:8px;list-style:none}
+.nrm-sec[open] summary{margin-bottom:6px}
 .rede{display:flex;align-items:center;justify-content:center;gap:8px;font-size:13px;font-weight:600;padding:8px 14px;text-align:center;border-bottom:1px solid var(--line);cursor:pointer}
 .rede.off{background:var(--yellow-soft);color:var(--yellow)}
 .rede.env{background:var(--blue-soft);color:var(--blue)}
@@ -315,6 +323,7 @@ details summary{cursor:pointer}
 
 <script src="config.js"></script>
 <script src="base-solucoes.js"></script>
+<script src="normas.js"></script>
 <script src="unidades-demo.js"></script>
 <script type="module" src="app.js"></script>
 </body>

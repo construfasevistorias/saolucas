@@ -1,11 +1,11 @@
 // Service worker: guarda o sistema no celular para abrir e funcionar sem internet.
 // Os DADOS (unidades, ocorrências, fila de envio) ficam no app.js (IndexedDB); aqui só os arquivos.
-const VERSAO = "vistoria-v1";
+const VERSAO = "vistoria-v2";
 const CDN = "https://cdn.jsdelivr.net";
 const SUPABASE_JS = CDN + "/npm/@supabase/supabase-js@2/+esm";
 const PLANTAS = ["final-01", "final-02", "final-03", "final-04", "final-05", "final-06", "final-07", "final-08", "final-09", "final-10", "501", "502", "503", "504"];
 const ARQUIVOS = [
-  "./", "index.html", "app.js", "config.js", "base-solucoes.js", "unidades-demo.js", "manifest.webmanifest",
+  "./", "index.html", "app.js", "config.js", "base-solucoes.js", "normas.js", "unidades-demo.js", "manifest.webmanifest",
   "img/logo-construfase.png", "img/icone-192.png", "img/icone-512.png",
   ...PLANTAS.map((p) => `img/plantas/${p}.jpg`),
 ];
